@@ -1,5 +1,284 @@
 # 변경 기록
 
+## 0.145.8
+
+- 투명한 레이캐스트 지면이 깊이 버퍼를 기록해 큰 X/Z 좌표에서 격자와 Z-fighting을 일으키던 문제 수정
+- 지면 클릭 판정은 유지하면서 색상·깊이 기록을 끄고 격자를 지면에서 조금 더 분리
+
+## 0.145.7
+
+- 굵은 격자의 중심 스냅 간격이 렌더 범위를 초과해 격자 전체가 사라지던 문제 수정
+- 격자 중심을 항상 카메라의 생성 반경 안에 유지하고 잘못된 시야 절두체 제거 방지
+
+## 0.145.6
+
+- 수평·수직 방향 격자의 간격 단계를 모두 `1, 4, 16, 64...` 계열로 통일
+- 카메라 높이에 따라 `2, 8, 32...` 격자가 섞이던 기본 단계 계산 제거
+
+## 0.145.5
+
+- 대형 작업공간의 +X/+Z 방향에서 격자가 깜빡이지 않도록 카메라 주변 로컬 좌표 기반 floating origin 렌더링 적용
+- 작업공간 끝부분에서도 격자 정점의 Float32 정밀도가 유지되도록 개선
+
+## 0.145.4
+
+- 환경설정 팝오버가 편집 화면 아래로 넘치지 않도록 상하 경계 기반 레이아웃으로 변경
+- 남은 화면 높이 안에서 미리보기 시간대 슬라이더와 값 표시까지 스크롤 가능하도록 수정
+
+## 0.145.3
+
+- Increased the environment utility popover height and added stable internal scrolling.
+- Added bottom scroll padding so the preview-time label remains visible below its slider.
+
+## 0.145.2
+
+- Reordered placement shapes so Mountain is sixth, Line is seventh, and Curve is eighth.
+
+## 0.145.1
+
+- Added a 1-to-16 block thickness option to the standard A-to-B line tool.
+- Applied identical thickness geometry to live line previews and final placement while preserving continuous endpoint chaining.
+
+## 0.145.0
+
+- Replaced independent A-to-B curve segments with a multi-point centripetal Catmull-Rom curve tool.
+- Added left-click control-point placement, live full-path preview, right-click completion, and explicit Finish/Clear controls.
+- Generated the complete smooth curve as one Undo transaction while retaining configurable thickness and placement filters.
+
+## 0.144.0
+
+- Added an A-to-B quadratic Bezier Curve placement shape with signed curvature height and configurable thickness.
+- Added live curve preview and continuous chaining where the completed B endpoint becomes the next A endpoint.
+- Applied selection limiting and air-only/solid-only placement rules to generated curve blocks.
+
+## 0.143.3
+
+- Moved Image Block into the empty tool cell beside Text Block after reducing the text tool width.
+- Kept 3D Model in the following grid cell using the same standard tool sizing.
+
+## 0.143.2
+
+- Changed the Text Block tool from a full-width two-column button to the same single tool-cell size as the other tools.
+
+## 0.143.1
+
+- Moved Sculpt to tool slot and numeric shortcut 4.
+- Shifted Box Select, Brush Select, Replace, Paste, and Move Selection to shortcuts 5 through 9.
+
+## 0.143.0
+
+- Allowed camera drag rotation while a time-sliced placement, deletion, or sculpt commit is still applying blocks.
+- Continued blocking new block edits during commit so Undo transactions cannot overlap, while preserving WASD and vertical camera movement.
+
+## 0.142.9
+
+- Incrementally patched simplified selection-mesh source data from only the coordinates changed by each edit.
+- Rebuilt updated simplified selection geometry in 5 ms background slices while retaining the previous mesh until replacement is ready.
+- Updated selection meshes after placement, deletion, sculpting, Undo, and Redo without rescanning the complete structure on pointer release.
+
+## 0.142.8
+
+- Restored simplified occupied-block meshes for large selections while caching them across ordinary block edits.
+- Rebuilt the display mesh only when selection bounds or mask identity changes, avoiding a full structure scan on every pointer release.
+- Kept a separate mutation-aware source cache for selection-move previews so moved block contents remain current.
+
+## 0.142.7
+
+- Stopped rebuilding occupied-block surface previews after every edit while a large selection is active.
+- Kept large box and brush selections visible as lightweight purple bounds without rescanning the structure on pointer release.
+- Retained detailed source preview generation when the selection-move tool actually needs it.
+
+## 0.142.6
+
+- Corrected the final mirrored side-face pair to east/north based on in-editor orientation verification.
+- Restored west/south to their original UV direction so all four horizontal faces have matching orientation.
+
+## 0.142.5
+
+- Corrected the side-face UV pair from east/south to west/south after comparing the two existing horizontal orientation groups.
+- Kept east, north, top, and bottom faces unchanged.
+
+## 0.142.4
+
+- Corrected horizontal UV mirroring on the positive-X east face and positive-Z south face.
+- Preserved the existing top, bottom, west, and north texture orientation and greedy-mesh texture tiling.
+
+## 0.142.3
+
+- Decoupled sculpt preview colors from the block selected in the placement palette.
+- Made sculpt-created terrain inherit the existing column surface or the dominant neighboring terrain type.
+- Removed `activeBlock` as the fallback material for empty-column sculpt raising and object smoothing fills.
+
+## 0.142.2
+
+- Guaranteed that the newest Undo transaction is retained regardless of how far it exceeds the normal changed-block memory budget.
+- Evicted only older history when one exceptionally large accidental operation consumes the complete Undo budget.
+
+## 0.142.1
+
+- Time-sliced large Undo finalization so comparing before/after block values no longer freezes one pointer-up frame.
+- Replaced per-block Undo objects with compact flat triples to reduce retained JavaScript object overhead.
+- Limited Undo retention by both 50 transactions and 500,000 changed blocks, automatically evicting the oldest large records.
+- Applied the asynchronous Undo path to single large brush clicks as well as continuous placement, deletion, and sculpt strokes.
+
+## 0.142.0
+
+- Time-sliced continuous placement, deletion, and sculpt commits across animation frames instead of applying every saved brush center in one pointer-up frame.
+- Batched sculpt height-cache maintenance and Undo capture across the complete stroke.
+- Deferred edit mesh rebuilding out of pointer events and limited rebuilding to one dirty chunk per frame with a tighter frame budget.
+- Kept single-click edits on their direct path while scheduling their visual chunk rebuild for the following frame.
+
+## 0.141.4
+
+- Kept the `.bpstructure` save-progress overlay visible while Play mode is active.
+- Used the same save preparation, encoding, file-writing, and completion progress flow in editor and Play modes.
+
+## 0.141.3
+
+- Simplified the fog readout to `안개 범위 50%` style text.
+- Changed the default fog coverage to 50% for new structures and files without a saved fog setting.
+
+## 0.141.2
+
+- Changed fog from an absolute exponential density to a linear range derived from the current render distance.
+- Made the fog slider control how much of the far end of the render distance is covered, while keeping zero as disabled.
+- Preserved compatibility with `.bpstructure` files containing the former fog-density setting.
+
+## 0.141.1
+
+- Deferred installed-block inspection for box selections until pointer release.
+- Kept drag feedback responsive by updating only the rectangular selection outline while the pointer is held.
+
+## 0.141.0
+
+- Stored per-structure environment and code settings in `.bpstructure`: camera speed, fog, render distance, jump coordinates, preview time, color/texture mode, Play FOV, Play sensitivity, function name, workspace/base coordinates, and viewpoint.
+- Restored all saved settings when reopening each structure and marked project files dirty when persistent environment controls change.
+- Kept external resource-pack files outside `.bpstructure` while persisting whether the structure uses color or texture rendering.
+
+## 0.140.16
+
+- Added horizontal-distance grid LOD rings so low-altitude views no longer draw one-block lines all the way to the horizon.
+- Increased grid spacing by 4× in each farther ring while retaining exact block alignment near the camera.
+- Reduced grid opacity and disabled depth writing to lessen distant line aliasing and shimmer.
+
+## 0.140.15
+
+- Added hysteresis to adaptive-grid level changes so camera movement near a distance threshold no longer toggles grid density every frame.
+- Increased grid-patch recentering from 16 to 64 grid intervals to reduce geometry replacement during camera movement.
+
+## 0.140.14
+
+- Halved adaptive-grid distance thresholds so coarser 2, 4, 8, and larger block intervals activate closer to the ground.
+
+## 0.140.13
+
+- Replaced the fixed workspace grid interval with camera-distance adaptive grid levels of 1, 2, 4, 8, and larger block steps.
+- Rendered only a bounded grid patch around the camera and expanded its covered world area as the interval increases.
+- Snapped adaptive-grid recentering to 16 grid intervals to avoid rebuilding geometry on every small camera movement.
+
+## 0.140.12
+
+- Replaced the square Three.js grid helper with a rectangular workspace-aligned line grid.
+- Used an integer block interval for large-workspace grid simplification so every visible line remains on an exact block boundary.
+- Kept grid lines inside the actual X/Z workspace bounds when the two dimensions differ.
+
+## 0.140.11
+
+- Added visible save progress for toolbar Save, Save As, Ctrl+S, and Cmd+S operations.
+- Reported structure preparation, destination selection, JSON encoding, byte size, file writing, completion, cancellation, and failure stages.
+- Prevented concurrent duplicate saves while a save operation is active.
+
+## 0.140.10
+
+- Added block-coordinate interpolation between sampled sculpt centers for continuous sculpt paths.
+- Removed the 90 ms planning throttle and two-center-per-event cap that could leave gaps during fast sculpt strokes.
+- Kept sculpt-center spacing proportional to half the brush size and deferred all terrain modification until pointer release.
+
+## 0.140.9
+
+- Preserved the editor camera position and look target immediately before entering Play mode.
+- Saved the pre-Play editor viewpoint instead of the temporary player camera when saving during Play mode.
+
+## 0.140.8
+
+- Stored the last camera position and look target in each `.bpstructure` file.
+- Restored the saved camera position, direction, and orbit distance when reopening a structure.
+- Converted a Play-mode camera view into a restorable editor viewpoint when saving during Play mode.
+
+## 0.140.7
+
+- Changed deferred placement, deletion, and generated-shape strokes to retain only sampled brush-center paths instead of every affected block coordinate.
+- Recomputed affected blocks from the saved center path on pointer release while keeping bounded transient previews during dragging.
+
+## 0.140.6
+
+- Added a live Bedrock Overworld Y-range warning using the inclusive buildable block range -64 through 319.
+- Highlighted base Y and workspace-height inputs in red when their combined range exceeds the limit without preventing editing, saving, or applying the size.
+
+## 0.140.5
+
+- Increased the editor camera-speed maximum from 400 to 1,000 blocks per second.
+- Increased each workspace axis maximum to 65,536 blocks and capped visual grid subdivisions to avoid huge guide geometry.
+- Added environment X/Y/Z camera-coordinate inputs with an instant-move action for editor and Play modes.
+
+## 0.140.4
+
+- Removed the persistent relative/absolute `.bpy` coordinate setting from the code-information panel and `.bpstructure` files.
+- Kept coordinate mode as a temporary export-only choice shown whenever `.bpy` export begins.
+
+## 0.140.3
+
+- Deferred continuous sphere, hollow-sphere, circle, disc, cylinder, and mountain placement until pointer release.
+- Accumulated generated-shape cells as preview-only data and committed the complete stroke as one undoable operation.
+
+## 0.140.2
+
+- Updated placement, deletion, and sculpt brush outlines directly from the current deferred-stroke target while dragging.
+- Prevented the brush outline from remaining at the continuous-stroke start until a camera-triggered hover refresh.
+
+## 0.140.1
+
+- Removed the `.bpstructure` format-version field and legacy `blocks`-array compatibility.
+- Accepted only the chunk-indexed format for `.bpstructure` files while retaining `.mcstructure` importing as a separate external format.
+
+## 0.140.0
+
+- Added the chunk-only `.bpstructure` format with independently encoded 16×16×16 block payloads and lightweight chunk/type indexes.
+- Loaded only chunk indexes when opening structures and decoded block data on first render, selection, collision, or editing access.
+- Preserved untouched lazy chunk payloads when saving so saving no longer forces every block into the live map.
+- Kept `.mcstructure` importing as a separate external format.
+
+## 0.139.9
+
+- Deferred continuous deletion until pointer release while showing only affected-block previews during dragging.
+- Deferred continuous sculpting until pointer release by recording and replaying the sampled sculpt path as one undoable operation.
+
+## 0.139.8
+
+- Changed continuous placement strokes to accumulate preview-only cells while the pointer is held.
+- Applied the complete placement stroke only on pointer release as a single undoable operation.
+- Discarded deferred placement previews without modifying blocks when the pointer is cancelled.
+
+## 0.139.7
+
+- Increased stationary continuous-brush activation from 600 ms to 2 seconds.
+- Kept single placement deferred until pointer release unless the target block changes or the intentional long-press threshold is reached.
+
+## 0.139.6
+
+- Replaced editor-mode block picking with the same voxel-grid 3D DDA traversal used by Play mode.
+- Preserved adjacent-face placement and empty workspace-floor picking without mesh raycasts.
+
+## 0.139.5
+
+- Replaced Play-mode Three.js mesh raycasting with a voxel-grid 3D DDA traversal.
+- Made the center-block outline cost depend on viewing distance instead of total rendered mesh and triangle count.
+
+## 0.139.4
+
+- Cancelled an in-progress project structure load as soon as another file is selected.
+- Ignored stale extension-side file reads and webview block-conversion results so only the latest selection can replace the editor.
+
 ## 0.131.0
 
 - 2,000칸을 넘는 큰 브러시 미리보기를 전체 셀 대신 표면 표본과 외곽선으로 단순화
@@ -1527,3 +1806,36 @@
 - Set the exported world spawn to the configured base coordinates instead of placing it above the workspace height.
 - Closed the blocking load overlay as soon as structure data is ready while nearby chunks continue rendering in the background.
 - Displayed the project-file loading overlay immediately on click, before extension-side file reading begins.
+
+# 0.138.1
+
+- Hid generic brush size and shape controls while using placement-shape tools.
+- Unified placement-shape preview and placement cell generation so `선택 안에서만` clips both identically.
+
+# 0.138.2
+
+- Added mipmapped minification for Minecraft block textures to reduce distant aliasing and shimmer.
+- Added up to 8× anisotropic filtering for clearer textures on oblique block faces.
+
+# 0.139.0
+
+- Batched mutation revisions and deferred column-height recomputation during large placement, deletion, undo, and sculpt operations.
+- Added per-chunk occupied-position indexes so mesh rebuilding skips empty cells instead of scanning every 16³ coordinate.
+- Replaced the fixed one-chunk-per-frame rebuild rate with an adaptive 6 ms budget based on measured chunk build time.
+
+# 0.139.1
+
+- Added a visible relative/absolute coordinate picker whenever `.bpy로 내보내기` is pressed.
+
+# 0.139.2
+
+- Changed continuous brush previews to a bounded recent-cell window instead of retaining the entire stroke.
+- Reduced pointer raycasts to at most 8 per event and interpolated block centers to preserve continuous placement and deletion.
+- Coalesced continuous sculpt applications to 90 ms intervals with at most two samples per update.
+- Throttled lightweight statistics updates during active strokes.
+
+# 0.139.3
+
+- Separated native text/number-input undo from structure block undo.
+- Prevented range, checkbox, and select controls from being reverted together with `Cmd/Ctrl+Z` block operations.
+- Added isolated `Ctrl+Y` structure redo handling on Windows.

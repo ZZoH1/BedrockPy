@@ -89,7 +89,10 @@ assert.ok(extensionSource.includes('id="block-category-tabs"'));
 assert.ok(extensionSource.includes('data-block-category="redstone"'));
 assert.ok(extensionSource.includes('id="palette-view-toggle"'));
 assert.ok(extensionSource.includes('class="field tool-detail" data-tool-detail="generate:cylinder generate:mountain"'));
-assert.ok(extensionSource.includes('data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:mountain"'));
+assert.ok(extensionSource.includes('class="field tool-detail" data-tool-detail="place erase lasso sculpt"'));
+assert.ok(extensionSource.includes('data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:curve generate:mountain"'));
+assert.ok(extensionSource.indexOf('id="make-mountain"') < extensionSource.indexOf('id="make-line"'));
+assert.ok(extensionSource.indexOf('id="make-line"') < extensionSource.indexOf('id="make-curve"'));
 assert.ok(!extensionSource.includes('<div class="tool-detail" data-tool-detail="place generate:*">'));
 assert.ok(extensionSource.includes('class="check-field tool-detail" data-tool-detail="generate:cylinder"><input id="shape-hollow"'));
 assert.ok(!extensionSource.includes('id="new-window-editor"'));
@@ -97,7 +100,9 @@ assert.ok(extensionSource.includes("workbench.action.moveEditorToNewWindow"));
 assert.ok(extensionSource.includes('id="base-x"'));
 assert.ok(extensionSource.includes('id="base-y"'));
 assert.ok(extensionSource.includes('id="base-z"'));
-assert.ok(extensionSource.includes('id="bpy-coordinate-mode"'));
+assert.ok(!extensionSource.includes('id="bpy-coordinate-mode"'));
+assert.ok(extensionSource.includes("message.type === 'requestBpyCoordinateMode'"));
+assert.ok(extensionSource.includes("title: '.bpy 좌표 방식 선택'"));
 assert.ok(!extensionSource.includes('id="insert"'));
 assert.ok(!extensionSource.includes("message.type === 'insert'"));
 assert.ok(extensionSource.includes('async function getVanillaTextureManifest()'));
@@ -114,13 +119,27 @@ assert.ok(blockRegistry.length > 1300);
 assert.ok(blockRegistry.includes('minecraft:stone'));
 const voxelSource = fs.readFileSync(path.join(root, 'media', 'voxel-editor.js'), 'utf8');
 assert.ok(voxelSource.includes('function noteCameraMotion'));
-assert.ok(voxelSource.includes('const maximumPickDistance = renderDistanceBlocks() + renderChunkSize'));
+assert.ok(voxelSource.includes('const maximumDistance = renderDistanceBlocks() + renderChunkSize'));
 assert.ok(!voxelSource.includes('Math.min(renderDistanceBlocks() + renderChunkSize, 96)'));
 assert.ok(voxelSource.includes('cameraHoverRefreshPending'));
 assert.ok(voxelSource.includes('function sharedChunkMaterial'));
-assert.ok(voxelSource.includes('maximumPickDistance'));
+assert.ok(!voxelSource.includes('raycaster.intersectObjects([...pickMeshes, ground], false)'));
 const voxelCss = fs.readFileSync(path.join(root, 'media', 'voxel-editor.css'), 'utf8');
+assert.ok(!/\.special-text-tool\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/.test(voxelCss));
+assert.ok(/\.special-import-row\s*\{\s*display:\s*contents;\s*\}/.test(voxelCss));
+assert.ok(voxelCss.includes('top: 56px; bottom: 12px'));
+assert.ok(voxelCss.includes('min-height: 0; flex: 1 1 auto'));
+assert.ok(voxelCss.includes('scroll-padding-bottom: 14px'));
+assert.ok(voxelSource.includes('grid.position.set(centerX, 0, centerZ)'));
+assert.ok(voxelSource.includes('x - centerX, 0.02, z0 - centerZ'));
+assert.ok(voxelSource.includes('4 ** Math.max(0, Math.floor(Math.log(distanceToGround / 48) / Math.log(4)))'));
+assert.ok(voxelSource.includes('Math.floor(maximumRange / Math.max(1, gridStep * 2))'));
+assert.ok(voxelSource.includes('grid.frustumCulled = false'));
+assert.ok(voxelSource.includes('colorWrite: false'));
+assert.ok(voxelSource.includes('depthWrite: false'));
 assert.ok(voxelCss.includes(':not(.play-hud):not(.cursor-coordinate)'));
+assert.ok(voxelCss.includes(':not(.cursor-coordinate):not(.bpy-progress)'));
+assert.ok(voxelCss.includes('.viewport.playing .bpy-progress:not([hidden]) { display: grid !important; }'));
 assert.ok(/\.viewport\.playing \.cursor-coordinate \{[\s\S]*?display: block !important; z-index: 51;/.test(voxelCss));
 assert.ok(voxelSource.includes('const renderChunkSize = 16'));
 assert.ok(voxelSource.includes('let placementStretch = { x: 1, y: 1, z: 1 }'));
@@ -169,8 +188,8 @@ assert.ok(/function enterPlayMode\(\)[\s\S]*?setTool\("move"\);[\s\S]*?const edi
 assert.ok(/function enterPlayMode\(\)[\s\S]*?selectionBox\.visible = false;[\s\S]*?selectionFill\.visible = false;/.test(voxelSource));
 assert.ok(/function enterPlayMode\(\)[\s\S]*?hover\.visible = false;[\s\S]*?clearGhost\(\);[\s\S]*?transformVisualGizmo\.visible = false;/.test(voxelSource));
 assert.ok(/function exitPlayMode\(\)[\s\S]*?playMode = false;[\s\S]*?updateSelection\(\);/.test(voxelSource));
-assert.ok(/function updateSelection\(\)[\s\S]*?if \(playMode\)[\s\S]*?selectionBox\.visible = false;[\s\S]*?return;/.test(voxelSource));
-assert.ok(/function refreshHover\(\) \{[\s\S]*?if \(playMode\)[\s\S]*?viewCenter[\s\S]*?hover\.visible = Boolean\(hoveredCell\)[\s\S]*?updateCursorCoordinate\(playerPosition, true\)/.test(voxelSource));
+assert.ok(/function updateSelection\(previewOnly = false\)[\s\S]*?if \(playMode\)[\s\S]*?selectionBox\.visible = false;[\s\S]*?return;/.test(voxelSource));
+assert.ok(/function refreshHover\(\) \{[\s\S]*?if \(playMode\)[\s\S]*?pickPlayBlockVoxelRay\(\)[\s\S]*?hover\.visible = Boolean\(hoveredCell\)[\s\S]*?updateCursorCoordinate\(playerPosition, true\)/.test(voxelSource));
 assert.ok(voxelSource.includes('let playCoordinatePrecise = true'));
 assert.ok(/cursor-coordinate"\)\?\.addEventListener\("click"[\s\S]*?playCoordinatePrecise = !playCoordinatePrecise/.test(voxelSource));
 assert.ok(voxelSource.includes('Number(value).toFixed(2)'));
@@ -191,14 +210,18 @@ assert.ok(voxelSource.includes('function applyUndoTransaction(transaction, direc
 assert.ok(!voxelSource.includes('JSON.stringify([...blocks.entries()])'));
 assert.ok(voxelSource.includes('const columnTopCache = new Map()'));
 assert.ok(voxelSource.includes('if (columnTopCache.has(columnKey)) return columnTopCache.get(columnKey)'));
-assert.ok(voxelSource.includes('const minimumSpacing = Math.max(1, Math.floor(brushRange().size / 3))'));
+assert.ok(voxelSource.includes('const minimumSpacing = Math.max(1, Math.floor(brushRange().size / 2))'));
 assert.ok(voxelSource.includes('previewInterval - (performance.now() - lastLiveEditPreviewAt)'));
 assert.ok(voxelSource.includes('let radius = 5'));
 assert.ok(!voxelSource.includes('radius = Math.max(8, Math.max(workspaceSize.x'));
 assert.ok(voxelSource.includes('functionName: normalizedFunctionName('));
+assert.ok(voxelSource.includes('const generatedCells = collectGeneratedCells(generator, cell)'));
+assert.ok(voxelSource.includes('putGenerated(generated.x, generated.y, generated.z, generated.type)'));
 assert.ok(voxelSource.includes('baseCoordinate: { ...baseCoordinate }'));
-assert.ok(voxelSource.includes('bpyCoordinateMode: document.getElementById("bpy-coordinate-mode")'));
-assert.ok(voxelSource.includes('const absoluteCoordinates = document.getElementById("bpy-coordinate-mode")?.value === "absolute"'));
+assert.ok(!voxelSource.includes('bpyCoordinateMode:'));
+assert.ok(voxelSource.includes('const absoluteCoordinates = bpyExportCoordinateMode === "absolute"'));
+assert.ok(voxelSource.includes('type: "requestBpyCoordinateMode"'));
+assert.ok(voxelSource.includes('message.type === "bpyCoordinateModeSelected"'));
 assert.ok(voxelSource.includes('String(baseCoordinate[axis] + value)'));
 assert.ok(voxelSource.includes('function defaultFunctionNameForFile(fileName)'));
 assert.ok(voxelSource.includes('data.functionName'));
@@ -237,12 +260,51 @@ for (const feature of [
   'recordLiveEditPreview', 'renderLiveEditPreview', 'clearLiveEditPreview',
   'applySelectionPoints', 'limit-to-selection', 'armedBrush',
   'collapsedSections', '"1": "move"', 'renderProjectTree', 'projectOpenFile',
+  'projectOpenRequestId',
+  'pickPlayBlockVoxelRay',
+  'traceVoxelRay',
+  'continuousBrushHoldDelayMs = 2000',
+  'planPlacementBrush', 'deferredPlacementCenters',
+  'planDeletionBrush', 'deferredDeletionCenters', 'planSculptCenter', 'deferredSculptCenters',
+  'createLazyTrackedBlockMap', 'lazyBlockChunkPayloads', 'encodeChunkPayload',
+  'ensureBlockChunkLoaded',
+  'serializeFlat',
+  'dirtyBlockDataChunks', 'evictCleanBlockChunks',
+  'viewpoint:', 'hasSavedViewpoint',
+  'editorViewpointBeforePlay',
+  'tool === "place" || tool === "erase" || tool === "sculpt"',
+  'requestStructureSave', 'structureSaveProgress', 'activeStructureSaveId',
+  'function updateAdaptiveGrid(force = false)', 'distanceToGround / 48',
+  'adaptiveGridStep', 'const snap = gridStep * snapCells',
+  'const maximumRange = Math.max(64, renderDistanceBlocks() + renderChunkSize)',
+  'settings:', 'restoreStructureSettings', 'playSensitivity',
+  'commitDeferredBrushPath', 'deferredBrushCommitActive', 'scheduleEditRebuild',
+  'commitUndoTransactionAsync', 'commitUndoTransactionAdaptively',
+  'maximumUndoChangedBlocks = 500000', 'maximumUndoTransactions = 50',
+  'minimumUndoTransactions = 1', 'history.length > minimumUndoTransactions',
+  'nearbyTerrainBlockType', 'tool === "sculpt" ? 0x66d9c7',
+  'brushPreviewBlockToken = tool === "sculpt" ? "sculpt" : activeBlock',
+  'function updateSelection(previewOnly = false)',
+  'const selectionVolume = (max.x - min.x + 1)',
+  'selectionSurfaceSourceCaches', 'forTransform ? blockMutationRevision : "cached-display"',
+  'return selectionSurfaceItems(true)',
+  'scheduleSelectionDisplayPatch', 'pendingSelectionDisplayChangeBatches',
+  'performance.now() - frameStartedAt >= 5',
+  'beginCameraDrag(event, "cameraDuringCommit")', 'pointerDown.mode === "cameraDuringCommit"',
+  '"4": "sculpt"', '"5": "selectBox"', '"9": "moveSelection"',
+  'generator === "curve"', 'function commitCurvePath()',
+  'curveControlPoints', 'THREE.CatmullRomCurve3', '"centripetal"',
+  'curve-thickness', 'finish-curve', 'clear-curve-points',
+  'line-thickness', 'shapeNumber("line-thickness", 1, 1, 16)',
+  'updateGhostPreview(pointerDown.lastCell)',
+  'isDeferredShapeTool', 'planGeneratedShape', 'deferredGeneratedCenters',
   'transformSelection', 'updateToolPanels', 'tool-context-hidden', 'groupedMutation',
   'renderRecentBlocks', 'movementCodeNames', 'updateAxisGizmo', 'updateCursorCoordinate',
   'sculptAt', 'columnTop', 'faceDefinitions', 'greedyMeshed', 'renderedFaceCount'
 ]) {
   assert.ok(voxelSource.includes(feature), `missing 3D editor feature: ${feature}`);
 }
+assert.ok(extensionSource.includes('latestProjectOpenRequestId'));
 assert.ok(!extensionSource.includes('class="crosshair"'));
 assert.ok(extensionSource.includes('id="viewport-panels"'));
 assert.ok(extensionSource.includes('id="utility-dock"'));
@@ -251,12 +313,20 @@ assert.ok(extensionSource.includes('id="brush-panel"'));
 assert.ok(extensionSource.includes('id="paste-air"'));
 assert.ok(extensionSource.includes('data-utility-group="environment"'));
 assert.ok(extensionSource.includes('data-utility-group="information"'));
-assert.ok(extensionSource.includes('id="fog-density" type="range" min="0" max="60" step="1" value="0"'));
-assert.ok(extensionSource.includes('id="camera-speed" type="range" min="1" max="400"'));
-assert.ok(extensionSource.includes('id="camera-speed" type="range" min="1" max="400" step="1" value="64"'));
+assert.ok(extensionSource.includes('id="fog-density" type="range" min="0" max="100" step="1" value="50"'));
+assert.ok(voxelSource.includes('scene.fog.near = fogRatio > 0 ? renderDistance * (1 - fogCoverage) : renderDistance'));
+assert.ok(voxelSource.includes('scene.fog.far = fogRatio > 0 ? renderDistance : renderDistance + 1'));
+assert.ok(extensionSource.includes('id="camera-speed" type="range" min="1" max="1000"'));
+assert.ok(extensionSource.includes('id="camera-speed" type="range" min="1" max="1000" step="1" value="64"'));
 assert.ok(extensionSource.includes('id="render-distance" type="range" min="16" max="1024"'));
-assert.ok(extensionSource.includes('id="size-x" type="number" min="1" max="512"'));
-assert.ok(voxelSource.includes('THREE.MathUtils.clamp(Number(value.x) || 32, 1, 512)'));
+assert.ok(extensionSource.includes('id="size-x" type="number" min="1" max="65536"'));
+assert.ok(voxelSource.includes('THREE.MathUtils.clamp(Number(value.x) || 32, 1, 65536)'));
+assert.ok(extensionSource.includes('id="jump-camera"'));
+assert.ok(voxelSource.includes('function jumpCameraToCoordinate()'));
+assert.ok(extensionSource.includes('id="bedrock-y-limit-warning"'));
+assert.ok(voxelSource.includes('function updateBedrockYLimitWarning()'));
+assert.ok(voxelSource.includes('const minimumBuildY = -64'));
+assert.ok(voxelSource.includes('const maximumBuildY = 319'));
 assert.ok(voxelSource.includes('selectionA = cloneCell(cell);'));
 assert.ok(voxelSource.includes('const selectionFill = new THREE.Mesh('));
 assert.ok(voxelSource.includes('selectionCount <= 1000 ? selectionCount : 0'));
@@ -278,7 +348,13 @@ assert.ok(extensionSource.includes('id="toggle-project-sidebar"'));
 assert.ok(voxelSource.includes('function setProjectSidebarCollapsed('));
 assert.ok(voxelSource.includes('projectSidebarCollapsed'));
 assert.ok(voxelSource.includes('const pendingRenderChunks = new Set()'));
-assert.ok(voxelSource.includes('progressiveChunksPerFrame = 1'));
+assert.ok(voxelSource.includes('const maximumChunksPerFrame = 1'));
+assert.ok(voxelSource.includes('const chunkBuildBudgetMs = 4'));
+assert.ok(voxelSource.includes('Math.floor(chunkBuildBudgetMs / Math.max(0.5, averageChunkBuildMs))'));
+assert.ok(voxelSource.includes('const blockChunkPositions = new Map()'));
+assert.ok(voxelSource.includes('for (const position of blockChunkPositions.get(activeChunkKey) || [])'));
+assert.ok(voxelSource.includes('function beginBulkMutation()'));
+assert.ok(voxelSource.includes('for (const columnKey of dirtyColumnTops) recomputeColumnTop(columnKey)'));
 assert.ok(voxelSource.includes('chunkDistanceToCamera(left) - chunkDistanceToCamera(right)'));
 assert.ok(voxelSource.includes('if (pendingRenderChunks.size) rebuild(false, true)'));
 assert.ok(voxelSource.includes('const transformedSourceBoundsCache = new WeakMap()'));
@@ -362,9 +438,19 @@ assert.ok(voxelSource.includes('geometry.addGroup('));
 assert.ok(voxelSource.includes('face.axis === 0'));
 assert.ok(voxelSource.includes('function decorateBlockSwatch('));
 assert.ok(voxelSource.includes('function refreshBlockIcons()'));
-assert.ok(voxelSource.includes('texture.generateMipmaps = false'));
+assert.ok(voxelSource.includes('texture.minFilter = THREE.NearestMipmapLinearFilter'));
+assert.ok(voxelSource.includes('texture.generateMipmaps = true'));
+assert.ok(voxelSource.includes('texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())'));
 assert.ok(voxelSource.includes('roughness: waterTint !== null ? 0.32 : translucentGlass ? 0.16 : 0.9'));
 assert.ok(voxelSource.includes('geometry.setAttribute("uv"'));
+assert.ok(voxelSource.includes('textureFace: "east"'));
+assert.ok(voxelSource.includes('textureFace: "south"'));
+assert.ok(voxelSource.includes('textureFace: "west"'));
+assert.ok(/textureFace: "east"[^\n]*flipU: true/.test(voxelSource));
+assert.ok(/textureFace: "north"[^\n]*flipU: true/.test(voxelSource));
+assert.ok(!/textureFace: "west"[^\n]*flipU: true/.test(voxelSource));
+assert.ok(!/textureFace: "south"[^\n]*flipU: true/.test(voxelSource));
+assert.ok(voxelSource.includes('if (face.flipU) uv[0]'));
 assert.ok(voxelSource.includes('dirtyProjectPaths'));
 assert.ok(voxelSource.includes('projectDrafts'));
 assert.ok(voxelSource.includes('markCurrentProjectFileDirty'));
@@ -399,9 +485,12 @@ assert.ok(voxelSource.includes('function insideBrush('));
 assert.ok(voxelSource.includes('previousCenter && insideBrush(previousCenter'));
 assert.ok(voxelSource.includes('pointerDown.lastAppliedBrushCenter'));
 assert.ok(voxelSource.includes('if (brushSignature === brushPreviewSignature'));
-assert.ok(voxelSource.includes('const previewLimit = tool === "sculpt" ? 6000 : 30000'));
-assert.ok(voxelSource.includes('const maximumScreenSteps = tool === "sculpt" ? 16 : 300'));
-assert.ok(voxelSource.includes('const sculptCandidates = candidates.length <= 3'));
+assert.ok(voxelSource.includes('const previewLimit = tool === "sculpt" ? 400 : 1200'));
+assert.ok(voxelSource.includes('const maximumScreenSteps = tool === "sculpt" ? 3 : 8'));
+assert.ok(voxelSource.includes('candidates.push(...interpolatedBrushCenters(previous, sampled))'));
+assert.ok(!voxelSource.includes('pointerDown.lastSculptAppliedAt || 0) < 90'));
+assert.ok(!voxelSource.includes('const sculptCandidates = candidates.length <= 2'));
+assert.ok(voxelSource.includes('Math.floor(brushRange().size / 2)'));
 assert.ok(voxelSource.includes('if (renderingComplete) {'));
 assert.ok(voxelSource.includes('removeThreshold = options.removeThreshold ?? 7'));
 assert.ok(voxelSource.includes('fillThreshold = options.fillThreshold ?? 18'));
@@ -440,6 +529,10 @@ assert.ok(voxelSource.includes('event.code === "KeyA"'));
 assert.ok(voxelSource.includes('event.code === "KeyC"'));
 assert.ok(voxelSource.includes('!isTransformPlacementTool(pending.tool)'));
 assert.ok(voxelSource.includes('Math.ceil(screenDistance / screenStepPixels)'));
+assert.ok(voxelSource.includes('const editingTextValue ='));
+assert.ok(voxelSource.includes('if (editingTextValue) {'));
+assert.ok(/modifier && event\.code === "KeyZ"[\s\S]*?event\.stopImmediatePropagation\(\);[\s\S]*?document\.getElementById\(event\.shiftKey \? "redo" : "undo"\)\.click\(\);/.test(voxelSource));
+assert.ok(voxelSource.includes('modifier && event.code === "KeyY" && !editingTextValue'));
 assert.ok(!extensionSource.includes('class="viewport-hud"'));
 assert.ok(!extensionSource.includes('id="workspace-label"'));
 assert.ok(extensionSource.includes('decodeMcstructure'));

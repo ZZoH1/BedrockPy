@@ -11,6 +11,7 @@ let status;
 let debounce;
 let structurePanel;
 let structureUri;
+let latestProjectOpenRequestId = 0;
 let structureProjectUri;
 let structureProjectWatcher;
 let structureContext;
@@ -306,12 +307,12 @@ function structureEditorHtml(webview, context) {
             <button data-tool="move">✥ 이동 <small>1</small></button>
             <button data-tool="place">＋ 배치 <small>2</small></button>
             <button data-tool="erase">－ 삭제 <small>3</small></button>
-            <button data-tool="selectBox">▣ 박스 선택 <small>4</small></button>
-            <button data-tool="lasso">⌁ 브러시 선택 <small>5</small></button>
-            <button data-tool="replace">⇄ 교체 <small>6</small></button>
-            <button data-tool="paste">▧ 붙여넣기 <small>7</small></button>
-            <button data-tool="moveSelection">✥ 선택 이동 <small>8</small></button>
-            <button data-tool="sculpt">◒ 조형 <small>9</small></button>
+            <button data-tool="sculpt">◒ 조형 <small>4</small></button>
+            <button data-tool="selectBox">▣ 박스 선택 <small>5</small></button>
+            <button data-tool="lasso">⌁ 브러시 선택 <small>6</small></button>
+            <button data-tool="replace">⇄ 교체 <small>7</small></button>
+            <button data-tool="paste">▧ 붙여넣기 <small>8</small></button>
+            <button data-tool="moveSelection">✥ 선택 이동 <small>9</small></button>
             <div class="point-tool-row">
               <button data-tool="selectA">A 지점 <small>[</small></button>
               <button data-tool="selectB">B 지점 <small>]</small></button>
@@ -387,7 +388,7 @@ function structureEditorHtml(webview, context) {
               <input id="sculpt-strength" type="range" min="1" max="8" step="1" value="1">
             </div>
           </div>
-          <div class="tool-detail" data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:mountain">
+          <div class="tool-detail" data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:curve generate:mountain">
           <div class="brush-divider">배치 도형</div>
           <div class="shape-grid">
             <button id="make-sphere" data-generator="sphere">● 구</button>
@@ -395,17 +396,18 @@ function structureEditorHtml(webview, context) {
             <button id="make-circle" data-generator="circle">◯ 원</button>
             <button id="make-disc" data-generator="disc">⬤ 원판</button>
             <button id="make-cylinder" data-generator="cylinder">▥ 원기둥</button>
-            <button id="make-line" data-generator="line">╱ A→B 선</button>
             <button id="make-mountain" data-generator="mountain">▲ 산</button>
+            <button id="make-line" data-generator="line">╱ A→B 선</button>
+            <button id="make-curve" data-generator="curve">⌢ A→B 곡선</button>
           </div>
           </div>
         </section>
         <section class="section" data-utility="workspace" data-utility-group="environment" data-utility-icon="◉" data-utility-label="환경 설정">
           <h2 class="section-title">작업공간 크기</h2>
           <div class="size-grid">
-            <label>X<input id="size-x" type="number" min="1" max="512" value="32"></label>
-            <label>Y<input id="size-y" type="number" min="1" max="512" value="32"></label>
-            <label>Z<input id="size-z" type="number" min="1" max="512" value="32"></label>
+            <label>X<input id="size-x" type="number" min="1" max="65536" value="32"></label>
+            <label>Y<input id="size-y" type="number" min="1" max="65536" value="32"></label>
+            <label>Z<input id="size-z" type="number" min="1" max="65536" value="32"></label>
           </div>
           <button id="apply-size" style="width:100%;margin-top:6px">크기 적용</button>
           <div class="brush-divider">기준 좌표</div>
@@ -415,21 +417,29 @@ function structureEditorHtml(webview, context) {
             <label>Z<input id="base-z" type="number" step="1" value="0"></label>
           </div>
           <p class="help">월드 내보내기와 절대 좌표 코드의 시작 위치입니다.</p>
+          <p id="bedrock-y-limit-warning" class="help y-limit-warning" hidden></p>
         </section>
         <section class="section" data-utility="camera" data-utility-group="environment" data-utility-icon="◉" data-utility-label="환경 설정">
           <h2 class="section-title">시점 조작</h2>
           <div class="field">
             <label for="camera-speed">이동 속도 <span id="speed-value">64.0 blocks/s</span></label>
-            <input id="camera-speed" type="range" min="1" max="400" step="1" value="64">
+            <input id="camera-speed" type="range" min="1" max="1000" step="1" value="64">
           </div>
           <div class="field">
-            <label for="fog-density">거리 어두워짐 <span id="fog-value">꺼짐</span></label>
-            <input id="fog-density" type="range" min="0" max="60" step="1" value="0">
+            <label for="fog-density">안개 범위 <span id="fog-value">50%</span></label>
+            <input id="fog-density" type="range" min="0" max="100" step="1" value="50">
           </div>
           <div class="field">
             <label for="render-distance">렌더링 거리 <span id="render-distance-value">256 blocks</span></label>
             <input id="render-distance" type="range" min="16" max="1024" step="16" value="256">
           </div>
+          <div class="brush-divider">시점 월드 좌표로 이동</div>
+          <div class="size-grid">
+            <label>X<input id="camera-jump-x" type="number" step="0.01" value="0"></label>
+            <label>Y<input id="camera-jump-y" type="number" step="0.01" value="0"></label>
+            <label>Z<input id="camera-jump-z" type="number" step="0.01" value="0"></label>
+          </div>
+          <button id="jump-camera" style="width:100%;margin-top:6px">즉시 이동</button>
           <p class="help"><kbd>WASD</kbd> 이동 · <kbd>Space</kbd> 위 · <kbd>Shift</kbd> 아래</p>
         </section>
         <section class="section" data-utility="textures" data-utility-group="environment" data-utility-icon="◉" data-utility-label="환경 설정">
@@ -444,11 +454,11 @@ function structureEditorHtml(webview, context) {
         </section>
         <section id="brush-panel" class="section brush-panel" data-tool-panel="place erase lasso sculpt generate:*">
           <h2 class="section-title">브러시</h2>
-          <div class="field">
+          <div class="field tool-detail" data-tool-detail="place erase lasso sculpt">
             <label for="brush-size">크기 <span id="brush-size-value">1</span></label>
             <input id="brush-size" type="range" min="1" max="32" step="1" value="1">
           </div>
-          <div class="field">
+          <div class="field tool-detail" data-tool-detail="place erase lasso sculpt">
             <label for="brush-shape">기본 모양</label>
             <select id="brush-shape" aria-label="브러시 모양">
               <option value="cube">큐브</option>
@@ -492,6 +502,25 @@ function structureEditorHtml(webview, context) {
             <div class="field">
               <label for="mountain-seed">시드</label>
               <input id="mountain-seed" type="number" value="1">
+            </div>
+          </div>
+          <div class="tool-detail" data-tool-detail="generate:curve">
+            <div class="brush-divider">곡선 옵션</div>
+            <div class="field">
+              <label for="curve-thickness">두께</label>
+              <input id="curve-thickness" type="number" min="1" max="16" value="1">
+            </div>
+            <div class="row" style="margin-top:7px">
+              <button id="finish-curve">곡선 완료</button>
+              <button id="clear-curve-points">점 초기화</button>
+            </div>
+            <p id="curve-point-count" class="help">0개 점 · 좌클릭 추가 · 우클릭 완료</p>
+          </div>
+          <div class="tool-detail" data-tool-detail="generate:line">
+            <div class="brush-divider">선 옵션</div>
+            <div class="field">
+              <label for="line-thickness">두께</label>
+              <input id="line-thickness" type="number" min="1" max="16" value="1">
             </div>
           </div>
         </section>
@@ -651,13 +680,6 @@ function structureEditorHtml(webview, context) {
             <label for="function-name">함수 이름</label>
             <input id="function-name" value="build_structure" spellcheck="false">
           </div>
-          <div class="field" style="margin-top:7px">
-            <label for="bpy-coordinate-mode">.bpy 좌표 방식</label>
-            <select id="bpy-coordinate-mode">
-              <option value="relative">상대 좌표</option>
-              <option value="absolute">절대 좌표</option>
-            </select>
-          </div>
           <p class="help">연속된 블록은 자동으로 <kbd>/fill</kbd>로 합치고 나머지는 <kbd>/setblock</kbd>으로 생성합니다.</p>
         </section>
         <section class="section" data-utility="stats" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="코드·정보">
@@ -794,10 +816,12 @@ function decodeMcstructure(bytes) {
 async function readStructure(uri) {
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
-    const data = path.extname(uri.fsPath).toLowerCase() === '.mcstructure'
+    const isMcstructure = path.extname(uri.fsPath).toLowerCase() === '.mcstructure';
+    const data = isMcstructure
       ? decodeMcstructure(bytes)
       : JSON.parse(Buffer.from(bytes).toString('utf8'));
-    if (!data || !Array.isArray(data.blocks)) throw new Error('blocks 배열이 없습니다');
+    if (!data || (isMcstructure ? !Array.isArray(data.blocks) : !Array.isArray(data.chunks)))
+      throw new Error(isMcstructure ? 'blocks 데이터가 없습니다' : '새 chunks 형식이 아닌 .bpstructure 파일입니다');
     return data;
   } catch (error) {
     vscode.window.showErrorMessage(`구조물 파일을 열 수 없습니다: ${error.message}`);
@@ -807,7 +831,7 @@ async function readStructure(uri) {
 
 async function sendStructure(panel, uri) {
   if (!uri) {
-    panel.webview.postMessage({ type: 'load', data: { version: 1, size: { x: 32, y: 32, z: 32 }, blocks: [] }, fileName: '새 구조물' });
+    panel.webview.postMessage({ type: 'load', data: { size: { x: 32, y: 32, z: 32 }, blockTypes: {}, chunks: [] }, fileName: '새 구조물' });
     return;
   }
   const data = await readStructure(uri);
@@ -1310,28 +1334,42 @@ async function openStructureEditor(context, initialUri) {
       return;
     }
     if (message.type === 'projectOpenFile') {
+      const requestId = Number(message.requestId) || 0;
+      latestProjectOpenRequestId = requestId;
       const target = safeProjectTarget(message.path);
       if (!/\.(?:bpstructure|mcstructure)$/i.test(target.fsPath)) return;
-      structureUri = target;
-      if (message.draftData && Array.isArray(message.draftData.blocks)) {
+      const targetIsMcstructure = path.extname(target.fsPath).toLowerCase() === '.mcstructure';
+      if (message.draftData && (targetIsMcstructure
+        ? Array.isArray(message.draftData.blocks)
+        : Array.isArray(message.draftData.chunks))) {
+        if (requestId !== latestProjectOpenRequestId) return;
+        structureUri = target;
         structurePanel.webview.postMessage({
           type: 'load',
           data: message.draftData,
           fileName: path.basename(target.fsPath),
           projectPath: String(message.path),
+          requestId,
           draft: true
         });
       } else {
-        const data = await readStructure(structureUri);
+        const data = await readStructure(target);
+        if (requestId !== latestProjectOpenRequestId) return;
         if (data) {
+          structureUri = target;
           structurePanel.webview.postMessage({
             type: 'load',
             data,
             fileName: path.basename(target.fsPath),
-            projectPath: String(message.path)
+            projectPath: String(message.path),
+            requestId
           });
         } else {
-          structurePanel.webview.postMessage({ type: 'projectOpenFailed', projectPath: String(message.path) });
+          structurePanel.webview.postMessage({
+            type: 'projectOpenFailed',
+            projectPath: String(message.path),
+            requestId
+          });
         }
       }
       await listStructureProject();
@@ -1401,7 +1439,7 @@ async function openStructureEditor(context, initialUri) {
       } catch {}
       try {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target.fsPath)));
-        const empty = { version: 1, size: { x: 32, y: 32, z: 32 }, blocks: [] };
+        const empty = { size: { x: 32, y: 32, z: 32 }, blockTypes: {}, chunks: [] };
         await vscode.workspace.fs.writeFile(target, Buffer.from(JSON.stringify(empty, null, 2) + '\n', 'utf8'));
         structureUri = target;
         await sendStructure(structurePanel, target);
@@ -1473,10 +1511,14 @@ async function openStructureEditor(context, initialUri) {
       return;
     }
     if (message.type === 'save') {
+      const operationId = message.operationId;
       let target = !message.saveAs && structureUri && path.extname(structureUri.fsPath).toLowerCase() === '.bpstructure'
         ? structureUri
         : undefined;
       if (!target) {
+        structurePanel.webview.postMessage({
+          type: 'structureSaveProgress', operationId, percent: 38, detail: '저장 위치 선택 중…'
+        });
         const sourceName = structureUri ? path.basename(structureUri.fsPath, path.extname(structureUri.fsPath)) : 'structure';
         target = await vscode.window.showSaveDialog({
           defaultUri: vscode.Uri.file(path.join(
@@ -1487,20 +1529,50 @@ async function openStructureEditor(context, initialUri) {
           saveLabel: '구조물 저장'
         });
       }
-      if (!target) return;
-      await vscode.workspace.fs.writeFile(target, Buffer.from(JSON.stringify(message.data, null, 2) + '\n', 'utf8'));
-      structureUri = target;
-      const projectPath = structureProjectUri &&
-        (target.fsPath === structureProjectUri.fsPath || target.fsPath.startsWith(structureProjectUri.fsPath + path.sep))
-        ? path.relative(structureProjectUri.fsPath, target.fsPath).replace(/\\/g, '/')
-        : null;
-      structurePanel.webview.postMessage({
-        type: 'saved',
-        fileName: path.basename(target.fsPath),
-        projectPath
+      if (!target) {
+        structurePanel.webview.postMessage({ type: 'structureSaveComplete', operationId, cancelled: true });
+        return;
+      }
+      try {
+        structurePanel.webview.postMessage({
+          type: 'structureSaveProgress', operationId, percent: 52, detail: '청크를 파일 형식으로 변환 중…'
+        });
+        const encoded = Buffer.from(JSON.stringify(message.data, null, 2) + '\n', 'utf8');
+        structurePanel.webview.postMessage({
+          type: 'structureSaveProgress', operationId, percent: 76,
+          detail: `${(encoded.byteLength / 1024 / 1024).toFixed(2)} MB 파일 기록 중…`
+        });
+        await vscode.workspace.fs.writeFile(target, encoded);
+        structureUri = target;
+        const projectPath = structureProjectUri &&
+          (target.fsPath === structureProjectUri.fsPath || target.fsPath.startsWith(structureProjectUri.fsPath + path.sep))
+          ? path.relative(structureProjectUri.fsPath, target.fsPath).replace(/\\/g, '/')
+          : null;
+        structurePanel.webview.postMessage({
+          type: 'saved',
+          operationId,
+          fileName: path.basename(target.fsPath),
+          projectPath
+        });
+        await listStructureProject();
+        vscode.window.showInformationMessage(`구조물을 저장했습니다: ${target.fsPath}`);
+      } catch (error) {
+        structurePanel.webview.postMessage({
+          type: 'structureSaveComplete', operationId, error: error.message
+        });
+        vscode.window.showErrorMessage(`구조물을 저장할 수 없습니다: ${error.message}`);
+      }
+      return;
+    }
+    if (message.type === 'requestBpyCoordinateMode') {
+      const selected = await vscode.window.showQuickPick([
+        { label: '상대 좌표', description: '함수를 실행한 위치를 기준으로 배치', mode: 'relative' },
+        { label: '절대 좌표', description: '환경 설정의 기준 좌표에 직접 배치', mode: 'absolute' }
+      ], {
+        title: '.bpy 좌표 방식 선택',
+        placeHolder: '내보낼 코드의 좌표 방식을 선택하세요'
       });
-      await listStructureProject();
-      vscode.window.showInformationMessage(`구조물을 저장했습니다: ${target.fsPath}`);
+      structurePanel.webview.postMessage({ type: 'bpyCoordinateModeSelected', mode: selected?.mode || null });
       return;
     }
     if (message.type === 'export') {

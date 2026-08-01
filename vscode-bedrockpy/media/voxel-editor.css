@@ -123,7 +123,7 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
   box-shadow: inset 3px 0 #65e7ff;
 }
 .special-text-tool {
-  grid-column: 1 / -1; color: #65e7ff; border-color: rgba(101, 231, 255, .55);
+  color: #65e7ff; border-color: rgba(101, 231, 255, .55);
 }
 .tool-grid .special-text-tool:hover, .tool-grid .special-text-tool.active,
 .tool-grid .special-image-tool:hover, .tool-grid .special-image-tool.active,
@@ -132,7 +132,7 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
   box-shadow: inset 3px 0 #65e7ff, inset 0 0 0 1px rgba(101, 231, 255, .18);
 }
 .special-import-row {
-  grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  display: contents;
 }
 .import-tool-options { margin-top: 9px; }
 .import-tool-options > button { width: 100%; }
@@ -222,6 +222,8 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
 .size-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 .size-grid label { color: var(--muted); font: 9px ui-monospace, monospace; }
 .size-grid input { margin-top: 3px; padding: 4px; text-align: center; }
+.size-grid input.y-limit-exceeded { border-color: #ff5d5d; color: #ff8a8a; box-shadow: 0 0 0 1px #ff5d5d55; }
+.y-limit-warning { color: #ff7777 !important; font-weight: 650; }
 .terrain-options { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
 .brush-divider {
   margin: 10px 0 4px; padding-top: 9px; border-top: 1px solid var(--line);
@@ -296,7 +298,8 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
 .viewport.playing .play-hud { display: block; }
 .viewport.playing #scene { cursor: grab; }
 .viewport.playing #scene:active { cursor: grabbing; }
-.viewport.playing > :not(#scene):not(.play-hud):not(.cursor-coordinate) { display: none !important; }
+.viewport.playing > :not(#scene):not(.play-hud):not(.cursor-coordinate):not(.bpy-progress) { display: none !important; }
+.viewport.playing .bpy-progress:not([hidden]) { display: grid !important; }
 .viewport.playing .cursor-coordinate {
   display: block !important; z-index: 51; pointer-events: auto; cursor: pointer;
   user-select: none;
@@ -390,7 +393,7 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
   box-shadow: 0 8px 28px rgba(0,0,0,.34);
 }
 .utility-dock {
-  position: absolute; z-index: 30; left: 12px; top: 56px;
+  position: absolute; z-index: 30; left: 12px; top: 56px; bottom: 12px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
 }
 .utility-buttons {
@@ -404,8 +407,9 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
 }
 .utility-button.active { border-color: var(--green); color: var(--green); }
 .utility-popover {
-  display: none; width: min(310px, calc(100vw - 286px)); max-height: calc(100vh - 145px);
-  overflow-y: auto; scrollbar-width: thin;
+  display: none; width: min(310px, calc(100vw - 286px)); min-height: 0; flex: 1 1 auto;
+  overflow-y: auto; scrollbar-width: thin; scrollbar-gutter: stable;
+  box-sizing: border-box; padding-right: 3px; padding-bottom: 14px; scroll-padding-bottom: 14px;
 }
 .utility-popover.open { display: block; }
 .utility-section {
