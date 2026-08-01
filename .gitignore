@@ -24,6 +24,9 @@ coverage/
 # Maintained as a separate Git repository
 /site/
 
+# Local BedrockPy projects and examples
+/Projects/
+
 # Generated packages and archives
 outputs/
 work/

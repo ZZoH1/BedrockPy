@@ -1,3 +1,0 @@
-vars:
-    int visits = 0
-    bool welcomed = false
