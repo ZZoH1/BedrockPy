@@ -255,7 +255,6 @@ function structureEditorHtml(webview, context) {
       <button id="save">저장</button>
       <button id="save-as">다른 이름으로</button>
       <div class="spacer"></div>
-      <button class="icon-button new-window-editor-button" id="new-window-editor" title="3D 편집기를 새 창으로 분리">↗</button>
       <button class="icon-button" id="undo" title="실행 취소">↶</button>
       <button class="icon-button" id="redo" title="다시 실행">↷</button>
       <button class="primary" id="insert">현재 .bpy에 삽입</button>
@@ -1091,20 +1090,6 @@ async function openStructureEditor(context, initialUri) {
     structureProjectWatcher = undefined;
   });
   structurePanel.webview.onDidReceiveMessage(async message => {
-    if (message.type === 'moveEditorToNewWindow') {
-      try {
-        structurePanel.reveal(structurePanel.viewColumn, false);
-        await new Promise(resolve => setTimeout(resolve, 80));
-        await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
-        structurePanel?.webview.postMessage({ type: 'editorMovedToNewWindow' });
-      } catch (error) {
-        structurePanel?.webview.postMessage({
-          type: 'editorMoveToNewWindowFailed',
-          error: error.message
-        });
-      }
-      return;
-    }
     if (message.type === 'ready') {
       await sendStructure(structurePanel, structureUri);
       await listStructureProject();

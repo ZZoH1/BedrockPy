@@ -1492,3 +1492,6 @@
 - Paused expensive block raycasting while the camera is moving and refreshes hover once movement stops.
 - Limited picking to nearby resident chunks on very large structures.
 - Shared block materials between chunk meshes to reduce GPU resources and draw preparation overhead.
+# 0.136.0
+
+- Removed the 3D editor detach-to-new-window button and its command handling.

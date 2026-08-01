@@ -4748,10 +4748,6 @@ function renderProjectTree(message) {
 }
 
 document.getElementById("open-project").addEventListener("click", () => vscode.postMessage({ type: "openProject" }));
-document.getElementById("new-window-editor")?.addEventListener("click", event => {
-  event.currentTarget.disabled = true;
-  vscode.postMessage({ type: "moveEditorToNewWindow" });
-});
 document.getElementById("refresh-project").addEventListener("click", () => vscode.postMessage({ type: "refreshProject" }));
 function selectedProjectDirectory() {
   if (!selectedProjectPath) return "";
@@ -4884,14 +4880,6 @@ window.addEventListener("blur", commitPendingPlacement);
 
 window.addEventListener("message", event => {
   const message = event.data;
-  if (message.type === "editorMovedToNewWindow") {
-    const button = document.getElementById("new-window-editor");
-    if (button) button.hidden = true;
-  }
-  if (message.type === "editorMoveToNewWindowFailed") {
-    const button = document.getElementById("new-window-editor");
-    if (button) button.disabled = false;
-  }
   if (message.type === "voxelImageLoaded") {
     const status = document.getElementById("voxel-image-status");
     if (status) status.textContent = `${message.fileName} 읽는 중…`;
