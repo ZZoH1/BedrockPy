@@ -91,6 +91,10 @@ const blockRegistry = JSON.parse(fs.readFileSync(path.join(root, 'media', 'bedro
 assert.ok(blockRegistry.length > 1300);
 assert.ok(blockRegistry.includes('minecraft:stone'));
 const voxelSource = fs.readFileSync(path.join(root, 'media', 'voxel-editor.js'), 'utf8');
+assert.ok(voxelSource.includes('function noteCameraMotion'));
+assert.ok(voxelSource.includes('cameraHoverRefreshPending'));
+assert.ok(voxelSource.includes('function sharedChunkMaterial'));
+assert.ok(voxelSource.includes('maximumPickDistance'));
 const voxelCss = fs.readFileSync(path.join(root, 'media', 'voxel-editor.css'), 'utf8');
 assert.ok(voxelCss.includes(':not(.play-hud):not(.cursor-coordinate)'));
 assert.ok(/\.viewport\.playing \.cursor-coordinate \{[\s\S]*?display: block !important; z-index: 51;/.test(voxelCss));

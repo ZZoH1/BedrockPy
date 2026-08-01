@@ -1487,3 +1487,8 @@
 
 - Added `.mcworld` export with the edited blocks written directly into Bedrock LevelDB chunks.
 - Exported worlds open with the structure already present and do not require an installation behavior pack.
+# 0.135.0
+
+- Paused expensive block raycasting while the camera is moving and refreshes hover once movement stops.
+- Limited picking to nearby resident chunks on very large structures.
+- Shared block materials between chunk meshes to reduce GPU resources and draw preparation overhead.

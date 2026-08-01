@@ -551,6 +551,7 @@ const pendingRenderChunks = new Set();
 const progressiveChunksPerFrame = 1;
 const chunkRenderMeshes = new Map();
 const chunkVisibleFaces = new Map();
+const sharedChunkMaterials = new Map();
 const blockTypeCounts = new Map();
 const blockChunkCounts = new Map();
 const columnTopCache = new Map();
@@ -563,6 +564,19 @@ let blockMutationRevision = 0;
 let structureDataLoading = false;
 let structureMeshLoadingProgress = false;
 let structureLoadRevision = 0;
+let cameraHoverRefreshPending = false;
+let lastCameraMotionAt = 0;
+let cameraMotionActive = false;
+let lastPlayViewUiAt = 0;
+
+function noteCameraMotion(now = performance.now()) {
+  lastCameraMotionAt = now;
+  cameraHoverRefreshPending = true;
+  if (cameraMotionActive) return;
+  cameraMotionActive = true;
+  hover.visible = false;
+  updateCursorCoordinate(null);
+}
 
 function renderChunkKey(x, y, z) {
   return `${Math.floor(x / renderChunkSize)},${Math.floor(y / renderChunkSize)},${Math.floor(z / renderChunkSize)}`;
@@ -899,8 +913,12 @@ function updatePlayCamera() {
   camera.rotation.order = "YXZ";
   camera.rotation.set(playerPitch, playerYaw, 0);
   camera.updateMatrixWorld();
-  updateAxisGizmo();
-  refreshHover();
+  const now = performance.now();
+  if (now - lastPlayViewUiAt >= 50) {
+    lastPlayViewUiAt = now;
+    updateAxisGizmo();
+    refreshHover();
+  }
 }
 
 function findPlaySpawn() {
@@ -1038,7 +1056,7 @@ document.querySelectorAll(".play-settings input").forEach(input => {
 });
 
 function moveCamera(deltaSeconds) {
-  if (!pressedKeys.size) return;
+  if (!pressedKeys.size) return false;
   const speed = Number(document.getElementById("camera-speed")?.value || 64) * deltaSeconds;
   const forward = new THREE.Vector3();
   camera.getWorldDirection(forward);
@@ -1052,11 +1070,12 @@ function moveCamera(deltaSeconds) {
   if (pressedKeys.has("a")) movement.sub(right);
   if (pressedKeys.has("space")) movement.y += 1;
   if (pressedKeys.has("shift")) movement.y -= 1;
-  if (!movement.lengthSq()) return;
+  if (!movement.lengthSq()) return false;
   movement.normalize().multiplyScalar(speed);
   target.add(movement);
   updateCamera();
-  refreshHover();
+  noteCameraMotion();
+  return true;
 }
 
 function updateLighting(value) {
@@ -1157,6 +1176,39 @@ function flushGroupedRebuild() {
   rebuild();
 }
 
+function sharedChunkMaterial(type, face, definition) {
+  const shortType = shortBlockId(type);
+  const texture = blockTexture(type, face);
+  const textureTint = blockTextureTint(shortType, face);
+  const waterTint = /^(?:flowing_)?water$/.test(shortType) ? textureTint : null;
+  const cutout = isCutoutTextureBlock(shortType);
+  const translucentGlass = isTranslucentGlassBlock(shortType);
+  const cacheKey = [
+    type, face, texture?.uuid || 'solid', textureTint ?? '', waterTint ?? '',
+    definition.color ?? '', definition.opacity ?? '', cutout ? 1 : 0, translucentGlass ? 1 : 0
+  ].join('|');
+  if (sharedChunkMaterials.has(cacheKey)) return sharedChunkMaterials.get(cacheKey);
+  const material = texture ? new THREE.MeshStandardMaterial({
+    color: textureTint ?? 0xffffff,
+    map: texture,
+    transparent: Boolean(definition.opacity) || waterTint !== null || cutout || translucentGlass,
+    opacity: waterTint !== null ? 0.76 : translucentGlass ? 0.72 : (definition.opacity || 1),
+    depthWrite: waterTint === null && !translucentGlass,
+    alphaTest: cutout ? 0.35 : 0,
+    roughness: waterTint !== null ? 0.32 : translucentGlass ? 0.16 : 0.9,
+    metalness: 0
+  }) : new THREE.MeshStandardMaterial({
+    color: definition.color,
+    transparent: Boolean(definition.opacity),
+    opacity: definition.opacity || 1,
+    roughness: 0.82,
+    metalness: type === 'gold_block' ? 0.28 : 0.02
+  });
+  material.userData.sharedChunkMaterial = true;
+  sharedChunkMaterials.set(cacheKey, material);
+  return material;
+}
+
 function rebuild(forceAll = false, streamingOnly = false) {
   const desiredPixelRatio = blocks.size > 100000 ? 1 : Math.min(devicePixelRatio, 1.5);
   if (desiredPixelRatio !== activePixelRatio) {
@@ -1203,8 +1255,10 @@ function rebuild(forceAll = false, streamingOnly = false) {
     for (const mesh of chunkRenderMeshes.get(chunkKey) || []) {
       scene.remove(mesh);
       mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) mesh.material.forEach(material => material.dispose());
-      else mesh.material.dispose();
+      if (Array.isArray(mesh.material)) mesh.material.forEach(material => {
+        if (!material.userData.sharedChunkMaterial) material.dispose();
+      });
+      else if (!mesh.material.userData.sharedChunkMaterial) mesh.material.dispose();
     }
     chunkRenderMeshes.delete(chunkKey);
     chunkVisibleFaces.delete(chunkKey);
@@ -1311,36 +1365,13 @@ function rebuild(forceAll = false, streamingOnly = false) {
     geometry.computeBoundingSphere();
     visibleFacesForChunk += mergedFaceCount;
     const definition = blockTypes[shortBlockId(type)] || { color: blockColor(type) };
-    const shortType = shortBlockId(type);
-    const materials = materialGroups.map(group => {
-      const texture = blockTexture(type, group.face);
-      const textureTint = blockTextureTint(shortType, group.face);
-      const waterTint = /^(?:flowing_)?water$/.test(shortType) ? textureTint : null;
-      const cutout = isCutoutTextureBlock(shortType);
-      const translucentGlass = isTranslucentGlassBlock(shortType);
-      if (texture) return new THREE.MeshStandardMaterial({
-        color: textureTint ?? 0xffffff,
-        map: texture,
-        transparent: Boolean(definition.opacity) || waterTint !== null || cutout || translucentGlass,
-        opacity: waterTint !== null ? 0.76 : translucentGlass ? 0.72 : (definition.opacity || 1),
-        depthWrite: waterTint === null && !translucentGlass,
-        alphaTest: cutout ? 0.35 : 0,
-        roughness: waterTint !== null ? 0.32 : translucentGlass ? 0.16 : 0.9,
-        metalness: 0
-      });
-      return new THREE.MeshStandardMaterial({
-        color: definition.color,
-        transparent: Boolean(definition.opacity),
-        opacity: definition.opacity || 1,
-        roughness: 0.82,
-        metalness: type === "gold_block" ? 0.28 : 0.02,
-      });
-    });
+    const materials = materialGroups.map(group => sharedChunkMaterial(type, group.face, definition));
     const material = materials.length === 1 ? materials[0] : materials;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = chunkShadowMode;
     mesh.receiveShadow = chunkShadowMode;
     mesh.userData.greedyMeshed = true;
+    mesh.userData.chunkKey = activeChunkKey;
     scene.add(mesh);
     meshesForChunk.push(mesh);
     }
@@ -1514,7 +1545,15 @@ function pick(event, adjacent = false) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const intersections = raycaster.intersectObjects([...renderedMeshes, ground], false);
+  const maximumPickDistance = blocks.size > 100000
+    ? Math.min(renderDistanceBlocks() + renderChunkSize, 96)
+    : renderDistanceBlocks() + renderChunkSize;
+  raycaster.far = maximumPickDistance;
+  const pickMeshes = blocks.size > 100000
+    ? renderedMeshes.filter(mesh => chunkDistanceToCamera(mesh.userData.chunkKey) <= maximumPickDistance)
+    : renderedMeshes;
+  const intersections = raycaster.intersectObjects([...pickMeshes, ground], false);
+  raycaster.far = Infinity;
   if (!intersections.length) return null;
   const hit = intersections[0];
   if (hit.object.userData.ground) {
@@ -2338,6 +2377,8 @@ canvas.addEventListener("pointermove", event => {
       theta = pointerDown.theta - dx * 0.008;
       phi = THREE.MathUtils.clamp(pointerDown.phi - dy * 0.008, 0.05, Math.PI - 0.05);
       updateCamera();
+      noteCameraMotion();
+      return;
     }
   }
   refreshHover();
@@ -2416,6 +2457,7 @@ canvas.addEventListener("wheel", event => {
   event.preventDefault();
   radius = THREE.MathUtils.clamp(radius * Math.exp(event.deltaY * 0.001), 5, 900);
   updateCamera();
+  noteCameraMotion();
 }, { passive: false });
 
 function setTool(next) {
@@ -5124,6 +5166,15 @@ function animate(now = performance.now()) {
   }
   if (playMode) movePlayer(deltaSeconds);
   else moveCamera(deltaSeconds);
+  if (!playMode && cameraHoverRefreshPending &&
+      !pressedKeys.size &&
+      pointerDown?.mode !== "camera" &&
+      pointerDown?.mode !== "cameraWhileTransforming" &&
+      now - lastCameraMotionAt >= 90) {
+    cameraHoverRefreshPending = false;
+    cameraMotionActive = false;
+    refreshHover();
+  }
   if (!structureDataLoading) {
     syncChunkStreaming();
     if (pendingRenderChunks.size) rebuild(false, true);
