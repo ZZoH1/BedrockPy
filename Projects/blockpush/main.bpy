@@ -1,0 +1,137 @@
+vars:
+    # let target = "@p"
+    let y_offset = 100
+    let y_offset_del1 = 99
+    int ice_speed = 5
+init:
+    /scoreboard objectives add dir_to_move dummy
+
+# sound fart:
+#     category = ui
+# sound op:
+#     category = ui
+# sound yeojja:
+#     category = ui
+
+tick:
+    /scoreboard players add @e[tag=ice_block] dir_to_move 0
+
+    as @e[tag=iron_block]:
+        at @s positioned ~ ~-y_offset ~:
+            if block ~ ~-1 ~ air:
+                /setblock ~ ~ ~ air
+                /setblock ~ ~-1 ~ iron_block
+                /tp ~ ~{y_offset_del1} ~
+            else:
+                positioned ~0.5 ~ ~:
+                    if entity @a[tag=target,r=0.6] positioned ~-0.5 ~ ~:
+                        if block ~-1 ~ ~ air:
+                            /setblock ~ ~ ~ air
+                            /setblock ~-1 ~ ~ iron_block
+                            /tp ~-1 ~{y_offset} ~
+                            # play fart
+                positioned ~-0.5 ~ ~:
+                    if entity @a[tag=target,r=0.6] positioned ~0.5 ~ ~:
+                        if block ~1 ~ ~ air:
+                            /setblock ~ ~ ~ air
+                            /setblock ~1 ~ ~ iron_block
+                            /tp ~1 ~{y_offset} ~
+                            # play fart
+                positioned ~ ~ ~0.5:
+                    if entity @a[tag=target,r=0.6] positioned ~ ~ ~-0.5:
+                        if block ~ ~ ~-1 air:
+                            /setblock ~ ~ ~ air
+                            /setblock ~ ~ ~-1 iron_block
+                            /tp ~ ~{y_offset} ~-1
+                            # play fart
+                positioned ~ ~ ~-0.5:
+                    if entity @a[tag=target,r=0.6] positioned ~ ~ ~0.5:
+                        if block ~ ~ ~1 air:
+                            /setblock ~ ~ ~ air
+                            /setblock ~ ~ ~1 iron_block
+                            /tp ~ ~{y_offset} ~1
+                            # play fart
+    
+    as @e[tag=ice_block]:
+        at @s positioned ~ ~-y_offset ~:
+            if block ~ ~-1 ~ air:
+                /setblock ~ ~ ~ air
+                /setblock ~ ~-1 ~ ice
+                /tp ~ ~{y_offset_del1} ~
+                /scoreboard players set @s dir_to_move 0
+            else:
+                if score @s dir_to_move matches 0:
+                    positioned ~0.5 ~ ~:
+                        if entity @a[tag=target,r=0.6] positioned ~-0.5 ~ ~:
+                            /scoreboard players set @s dir_to_move 1
+                            # play yeojja
+                    positioned ~-0.5 ~ ~:
+                        if entity @a[tag=target,r=0.6] positioned ~0.5 ~ ~:
+                            /scoreboard players set @s dir_to_move 2
+                            # play yeojja
+                    positioned ~ ~ ~0.5:
+                        if entity @a[tag=target,r=0.6] positioned ~ ~ ~-0.5:
+                            /scoreboard players set @s dir_to_move 3
+                            # play yeojja
+                    positioned ~ ~ ~-0.5:
+                        if entity @a[tag=target,r=0.6] positioned ~ ~ ~0.5:
+                            /scoreboard players set @s dir_to_move 4
+                            # play yeojja
+    
+tick every ice_speed:
+    as @e[tag=ice_block]:
+        at @s positioned ~ ~-y_offset ~:
+            if score @s dir_to_move matches 1:
+                if block ~-1 ~ ~ air:
+                    /setblock ~ ~ ~ air
+                    /setblock ~-1 ~ ~ ice
+                    /tp ~-1 ~{y_offset} ~
+                    # play op
+                else:
+                    /scoreboard players set @s dir_to_move 0
+            if score @s dir_to_move matches 2:
+                if block ~1 ~ ~ air:
+                    /setblock ~ ~ ~ air
+                    /setblock ~1 ~ ~ ice
+                    /tp ~1 ~{y_offset} ~
+                    # play op
+                else:
+                    /scoreboard players set @s dir_to_move 0
+            if score @s dir_to_move matches 3:
+                if block ~ ~ ~-1 air:
+                    /setblock ~ ~ ~ air
+                    /setblock ~ ~ ~-1 ice
+                    /tp ~ ~{y_offset} ~-1
+                    # play op
+                else:
+                    /scoreboard players set @s dir_to_move 0
+            if score @s dir_to_move matches 4:
+                if block ~ ~ ~1 air:
+                    /setblock ~ ~ ~ air
+                    /setblock ~ ~ ~1 ice
+                    /tp ~ ~{y_offset} ~1
+                    # play op
+                else:
+                    /scoreboard players set @s dir_to_move 0
+
+function generate_iron:
+    /setblock ~ ~ ~ iron_block
+    align xyz positioned ~0.5 ~0.2 ~0.5:
+        /summon ender_crystal ~ ~{y_offset} ~
+        positioned ~ ~y_offset ~:
+            /tag @e[type=ender_crystal,c=1,tag=!iron_block] add iron_block
+
+function generate_ice:
+    /setblock ~ ~ ~ ice
+    align xyz positioned ~0.5 ~0.2 ~0.5:
+        /summon ender_crystal ~ ~{y_offset} ~
+        positioned ~ ~y_offset ~:
+            /tag @e[type=ender_crystal,c=1,tag=!ice_block] add ice_block
+
+function reset:
+    as @e[tag=iron_block] at @s:
+        /setblock ~ ~-{y_offset} ~ air
+        /kill @s
+    as @e[tag=ice_block] at @s:
+        /setblock ~ ~-{y_offset} ~ air
+        /kill @s

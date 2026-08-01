@@ -1,0 +1,27 @@
+# 들여쓰기로 블록을 표현합니다. 일반 명령은 그대로 적습니다.
+init:
+    /say BedrockPy 팩이 처음 적용되었거나 업데이트되었습니다
+
+tick:
+    let radius = 3
+
+    # 컴파일 시간 반복문: 아래 코드는 7개의 particle 명령으로 펼쳐집니다.
+    for x in range(-3, 4):
+        /particle minecraft:basic_flame_particle ~{radius} ~1 ~
+
+    # execute if entity ... run ... 으로 변환됩니다.
+    if entity @a[tag=welcome]:
+        as @a[tag=welcome]:
+            at @s:
+                /title @s actionbar 환영합니다
+                /tag @s remove welcome
+    else:
+        /say welcome 태그를 가진 플레이어가 없습니다
+
+    unless entity @e[type=armor_stand,tag=clock]:
+        /summon armor_stand 0 -64 0 minecraft:entity_spawned clock
+
+function hello:
+    /say BedrockPy로 만든 함수입니다.
+    /give @s diamond 1
+    

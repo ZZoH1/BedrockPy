@@ -1,0 +1,8 @@
+function countdown:
+    /say 3
+    sleep(20)
+    /say 2
+    sleep(20)
+    /say 1
+    sleep(20)
+    /say 시작!

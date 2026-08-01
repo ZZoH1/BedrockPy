@@ -1,0 +1,35 @@
+vars:
+    float value = 1.5
+    float result = 0.0
+
+
+
+function absolute_demo:
+    result = abs(value)
+
+function power_demo:
+    result = pow(value, 2)
+
+function sqrt_demo:
+    result = sqrt(value)
+
+function root_demo:
+    result = root(value, 3)
+
+function sin_demo:
+    result = sin(value)
+
+function cos_demo:
+    result = cos(value)
+
+function tan_demo:
+    result = tan(value)
+
+function natural_log_demo:
+    result = log(value)
+
+function base10_log_demo:
+    result = log(value, 10.0)
+
+function show_result:
+    tell @s, "결과: ", result:4

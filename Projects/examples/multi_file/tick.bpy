@@ -1,0 +1,5 @@
+tick:
+    visits += 1
+    if visits >= 100:
+        call rewards/announce
+        visits = 0

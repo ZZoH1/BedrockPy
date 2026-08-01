@@ -1,0 +1,12 @@
+pack:
+    name = "Push Blocks"
+    description = "Push blocks function"
+    # icon = "assets/pack_icon.png"
+    version = auto
+    min_engine_version = [1, 21, 0]
+
+    namespace = "pushblock"
+    output = "build/push_blocks"
+    mcaddon = true
+    # max_lines = 10000
+    

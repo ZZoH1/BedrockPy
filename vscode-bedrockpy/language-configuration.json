@@ -1,0 +1,37 @@
+{
+  "comments": {
+    "lineComment": "#",
+    "blockComment": ["\"\"\"", "\"\"\""]
+  },
+  "brackets": [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"]
+  ],
+  "autoClosingPairs": [
+    { "open": "(", "close": ")" },
+    { "open": "[", "close": "]" },
+    { "open": "{", "close": "}" },
+    { "open": "\"", "close": "\"", "notIn": ["string", "comment"] },
+    { "open": "'", "close": "'", "notIn": ["string", "comment"] }
+  ],
+  "surroundingPairs": [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+    ["\"", "\""],
+    ["'", "'"]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(?:tick|init|vars|pack|else|sound\\s+[a-z0-9_./-]+|function\\s+[a-z0-9_./-]+(?:\\s+when\\s+(?:first|last))?|for\\s+[A-Za-z_]\\w*\\s+in\\s+range\\(.+\\)|if\\s+.+|unless\\s+.+|(?:as|at|positioned|rotated|facing|anchored|in|align)\\s+.+):\\s*(?:#.*)?$"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*(?:tick|init|vars|pack|else|sound\\s+[a-z0-9_./-]+|function\\s+[a-z0-9_./-]+(?:\\s+when\\s+(?:first|last))?|for\\s+[A-Za-z_]\\w*\\s+in\\s+range\\(.+\\)|if\\s+.+|unless\\s+.+|(?:as|at|positioned|rotated|facing|anchored|in|align)\\s+.+):\\s*(?:#.*)?$",
+      "action": { "indent": "indent" }
+    }
+  ],
+  "folding": {
+    "offSide": true
+  }
+}

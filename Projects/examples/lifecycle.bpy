@@ -1,0 +1,13 @@
+vars:
+    bool attacking = true
+
+tick:
+    if attacking:
+        call attack_started
+        call attack_stopped
+
+function attack_started when first:
+    /say 공격 연속 실행이 시작되었습니다
+
+function attack_stopped when last:
+    /say 공격 연속 실행이 끝났습니다

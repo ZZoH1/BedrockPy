@@ -1,0 +1,2 @@
+function rewards/announce:
+    tell @a, "여러 파일을 한 팩으로 컴파일했습니다. 실행 횟수: ", visits

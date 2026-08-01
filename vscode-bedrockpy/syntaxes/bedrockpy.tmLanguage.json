@@ -1,0 +1,136 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "BedrockPy",
+  "scopeName": "source.bedrockpy",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    {
+      "name": "keyword.declaration.variables.bedrockpy",
+      "match": "^(\\s*)(vars|pack)(\\s*)(:)"
+    },
+    {
+      "name": "meta.function.definition.bedrockpy",
+      "match": "^(\\s*)(function)(\\s+)([a-z0-9_./-]+)(?:\\s+(when)\\s+(first|last))?(\\s*)(:)",
+      "captures": {
+        "2": { "name": "storage.type.function.bedrockpy" },
+        "4": { "name": "entity.name.function.bedrockpy" },
+        "5": { "name": "keyword.control.function-condition.bedrockpy" },
+        "6": { "name": "keyword.control.function-condition.bedrockpy" },
+        "8": { "name": "punctuation.separator.bedrockpy" }
+      }
+    },
+    {
+      "name": "meta.sound.definition.bedrockpy",
+      "match": "^(\\s*)(sound)(\\s+)([a-z0-9_./-]+)(\\s*)(:)",
+      "captures": {
+        "2": { "name": "storage.type.sound.bedrockpy" },
+        "4": { "name": "entity.name.sound.bedrockpy" },
+        "6": { "name": "punctuation.separator.bedrockpy" }
+      }
+    },
+    {
+      "name": "meta.block.tick-periodic.bedrockpy",
+      "match": "^(\\s*)(tick)(\\s+)(every)(\\s+)([A-Za-z_]\\w*|\\d+)(\\s*)(:)",
+      "captures": {
+        "2": { "name": "keyword.control.bedrockpy" },
+        "4": { "name": "keyword.control.bedrockpy" },
+        "6": { "name": "variable.other.bedrockpy" },
+        "8": { "name": "punctuation.separator.bedrockpy" }
+      }
+    },
+    {
+      "name": "meta.block.tick.bedrockpy",
+      "match": "^(\\s*)(tick|init)(\\s*)(:)",
+      "captures": {
+        "2": { "name": "keyword.control.bedrockpy" },
+        "4": { "name": "punctuation.separator.bedrockpy" }
+      }
+    },
+    {
+      "name": "meta.loop.bedrockpy",
+      "match": "\\b(for)(\\s+)([A-Za-z_]\\w*)(\\s+)(in)(\\s+)(range)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.loop.bedrockpy" },
+        "3": { "name": "variable.other.bedrockpy" },
+        "5": { "name": "keyword.operator.bedrockpy" },
+        "7": { "name": "support.function.builtin.bedrockpy" }
+      }
+    },
+    {
+      "name": "keyword.control.conditional.bedrockpy",
+      "match": "\\b(if|else|unless|and|or|not)\\b"
+    },
+    {
+      "name": "keyword.control.context.bedrockpy",
+      "match": "^(\\s*)(as|at|positioned|rotated|facing|anchored|in|align)\\b"
+    },
+    {
+      "name": "storage.type.variable.bedrockpy",
+      "match": "\\b(let|int|float|bool)(?=\\s+[A-Za-z_]\\w*\\s*=)"
+    },
+    {
+      "name": "support.type.property-name.sound.bedrockpy",
+      "match": "\\b(category|is3D|name|description|icon|version|min_engine_version|namespace|output|mcpack|max_lines)(?=\\s*=)"
+    },
+    {
+      "name": "keyword.control.call.bedrockpy",
+      "match": "^(\\s*)(call|tell|title|subtitle|actionbar|play|rotation|location|tp)\\b"
+    },
+    {
+      "name": "keyword.operator.assignment.rotation.bedrockpy",
+      "match": "->"
+    },
+    {
+      "name": "variable.other.interpolation.bedrockpy",
+      "match": "\\{[A-Za-z_]\\w*\\}"
+    },
+    {
+      "name": "constant.numeric.bedrockpy",
+      "match": "(?<![A-Za-z_])[-+]?\\d+(?:\\.\\d+)?(?![A-Za-z_])"
+    },
+    {
+      "name": "constant.language.bedrockpy",
+      "match": "\\b(true|false|True|False|auto)\\b"
+    },
+    {
+      "name": "constant.numeric.format-precision.bedrockpy",
+      "match": "(?<=[A-Za-z_]):[0-6]\\b"
+    },
+    {
+      "name": "support.function.math.bedrockpy",
+      "match": "\\b(abs|pow|sqrt|root|sin|cos|tan|log|max|min)(?=\\s*\\()"
+    },
+    {
+      "name": "support.function.async.bedrockpy",
+      "match": "\\b(?:sleep|await_tickingarea)(?=\\s*\\()"
+    },
+    {
+      "name": "keyword.control.pass.bedrockpy",
+      "match": "\\bpass\\b"
+    },
+    {
+      "name": "variable.language.selector.bedrockpy",
+      "match": "@[pares](?:\\[[^\\]]*\\])?"
+    },
+    {
+      "name": "punctuation.definition.command.bedrockpy",
+      "match": "^(\\s*)/"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.block.triple-double.bedrockpy", "begin": "\"\"\"", "end": "\"\"\"" },
+        { "name": "comment.block.triple-single.bedrockpy", "begin": "'''", "end": "'''" },
+        { "name": "comment.line.number-sign.bedrockpy", "begin": "#", "end": "$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "name": "string.quoted.double.bedrockpy", "begin": "\"", "end": "\"", "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.bedrockpy" }] },
+        { "name": "string.quoted.single.bedrockpy", "begin": "'", "end": "'", "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.bedrockpy" }] }
+      ]
+    }
+  }
+}

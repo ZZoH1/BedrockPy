@@ -1,0 +1,168 @@
+{
+  "name": "bedrockpy-language",
+  "displayName": "BedrockPy Language Tools",
+  "description": "Minecraft Bedrock 함수 팩용 BedrockPy 언어 지원",
+  "version": "0.134.0",
+  "publisher": "bedrockpy",
+  "icon": "media/bedrockpy-logo-128.png",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Programming Languages", "Linters"],
+  "keywords": ["minecraft", "bedrock", "mcfunction", "bpy"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:bedrockpy",
+    "onCommand:bedrockpy.openStructureEditor"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bedrockpy",
+        "aliases": ["BedrockPy", "bedrockpy"],
+        "extensions": [".bpy"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bedrockpy",
+        "scopeName": "source.bedrockpy",
+        "path": "./syntaxes/bedrockpy.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bedrockpy.compilePack",
+        "title": "BedrockPy: 행동 팩 컴파일",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "bedrockpy.buildMcpack",
+        "title": "BedrockPy: .mcpack 생성"
+      },
+      {
+        "command": "bedrockpy.buildMcaddon",
+        "title": "BedrockPy: .mcaddon 생성"
+      },
+      {
+        "command": "bedrockpy.openStructureEditor",
+        "title": "BedrockPy: 3D 구조물 편집기 열기",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "bedrockpy.validate",
+        "title": "BedrockPy: 현재 파일 문법 검사"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "bedrockpy.compilePack",
+          "when": "editorLangId == bedrockpy",
+          "group": "navigation"
+        },
+        {
+          "command": "bedrockpy.openStructureEditor",
+          "when": "editorLangId == bedrockpy || resourceExtname == .bpstructure || resourceExtname == .mcstructure",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "bedrockpy.buildMcpack",
+          "when": "editorLangId == bedrockpy",
+          "group": "bedrockpy@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "bedrockpy.openStructureEditor"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "bedrockpy.openStructureEditor",
+          "when": "resourceExtname == .bpstructure || resourceExtname == .mcstructure",
+          "group": "bedrockpy@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "BedrockPy",
+      "properties": {
+        "bedrockpy.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "BedrockPy 컴파일러를 실행할 Python 경로"
+        },
+        "bedrockpy.namespace": {
+          "type": "string",
+          "default": "bedrockpy",
+          "pattern": "^[a-z0-9_-]+$",
+          "description": "생성되는 함수의 기본 네임스페이스"
+        },
+        "bedrockpy.packName": {
+          "type": "string",
+          "default": "BedrockPy Pack",
+          "description": "행동 팩의 기본 표시 이름"
+        },
+        "bedrockpy.maxLines": {
+          "type": "integer",
+          "default": 10000,
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "tick 함수 조각 하나의 최대 명령 수"
+        },
+        "bedrockpy.projectRoot": {
+          "type": "string",
+          "default": "",
+          "description": "한 팩으로 컴파일할 프로젝트 폴더. 비어 있으면 현재 .bpy 파일의 폴더를 사용하며, 상대 경로는 VS Code 작업 영역 기준입니다."
+        },
+        "bedrockpy.validateOnType": {
+          "type": "boolean",
+          "default": true,
+          "description": "입력하는 동안 문법 오류 검사"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/smoke.js",
+    "build:release": "node scripts/build-release.js",
+    "vscode:prepublish": "npm run build:release",
+    "package": "npx @vscode/vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "javascript-obfuscator": "^4.1.1"
+  },
+  "dependencies": {
+    "@8crafter/leveldb-zlib": "^1.6.0",
+    "jszip": "^3.10.1",
+    "mcbe-leveldb": "^1.21.0"
+  },
+  "overrides": {
+    "tar": "7.5.22"
+  },
+  "files": [
+    "dist/extension.js",
+    "media/bedrock-blocks.json",
+    "media/bedrockpy-logo-128.png",
+    "media/three.core.min.js",
+    "media/three.module.min.js",
+    "media/voxel-editor.bundle.js",
+    "media/voxel-editor.css",
+    "language-configuration.json",
+    "syntaxes/**",
+    "compiler/**",
+    "node_modules/@8crafter/leveldb-zlib/**",
+    "node_modules/mcbe-leveldb/**",
+    "node_modules/protodef/**",
+    "node_modules/prismarine-nbt/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}

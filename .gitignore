@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node.js and web builds
+node_modules/
+.next/
+dist/
+coverage/
+
+# Maintained as a separate Git repository
+/site/
+
+# Generated packages and archives
+outputs/
+work/
+build/
+.bedrockpy/
+/Projects/examples/*BP/
+*.vsix
+*.mcpack
+*.zip
+
+# Logs
+*.log

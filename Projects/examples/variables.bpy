@@ -1,0 +1,15 @@
+vars:
+    int count = 0
+    float speed = 1.5
+    bool enabled = true
+
+tick:
+    count += 1
+    speed = speed * 1.1
+    enabled = count >= 20
+
+    if enabled:
+        /title @a actionbar 활성화됨
+        tell @a, "횟수: ", count, " / 기본 속도: ", speed, " / 1자리 속도: ", speed:1
+    else:
+        /title @a actionbar 대기 중
