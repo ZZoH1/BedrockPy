@@ -4788,14 +4788,6 @@ document.getElementById("export-mcworld")?.addEventListener("click", () => {
   updateBpyProgress(2, "월드 데이터 준비 중…", ".mcworld로 내보내는 중");
   vscode.postMessage({ type: "exportMcworld", operationId: activeBpyOperationId, data: serialize() });
 });
-document.getElementById("insert").addEventListener("click", async () => {
-  if (activeBpyOperationId) return;
-  activeBpyOperationId = `insert-${Date.now()}`;
-  updateBpyProgress(1, "구조물 분석 준비 중…", ".bpy에 삽입하는 중");
-  await nextUiFrame();
-  const output = await generateCode();
-  vscode.postMessage({ type: "insert", operationId: activeBpyOperationId, ...output });
-});
 
 window.addEventListener("keydown", event => {
   const editingText = event.target instanceof HTMLInputElement ||
@@ -5052,13 +5044,12 @@ const buttonHelp = {
   "save-as": "현재 작업을 새로운 .bpstructure 파일로 저장합니다.",
   undo: "마지막 블록 편집을 취소합니다.",
   redo: "취소한 편집을 다시 적용합니다.",
-  insert: "생성된 구조물 함수를 현재 열려 있는 .bpy 파일 끝에 삽입합니다.",
   export: "구조물을 /fill과 /setblock 명령으로 압축한 .bpy 파일로 내보냅니다.",
   "export-mcworld": "현재 구조물을 새 Minecraft Bedrock 월드로 내보냅니다. 월드를 처음 열면 구조물이 자동 설치됩니다.",
   "apply-size": "입력한 X/Y/Z 크기를 적용합니다. 범위 밖의 블록은 제거됩니다.",
   "use-color-rendering": "텍스처 없이 기존 단색 고속 렌더링을 사용합니다.",
   "use-texture-rendering": "현재 적용된 베드락 리소스팩의 실제 블록 텍스처를 사용합니다.",
-  "install-vanilla-textures": "Mojang 공식 bedrock-samples에서 기본 블록 텍스처를 설치하거나 갱신합니다.",
+  "install-vanilla-textures": "Mojang 공식 bedrock-samples 최신 릴리스에서 기본 블록 텍스처를 설치하거나 갱신합니다.",
   "choose-resource-pack": "리소스팩 폴더 또는 .mcpack/.zip 파일을 선택해 블록 텍스처를 교체합니다.",
   "fill-selection": "A와 B 사이의 모든 칸을 현재 블록으로 채웁니다.",
   "clear-selection": "A와 B 사이의 모든 블록을 삭제합니다.",

@@ -43,7 +43,7 @@ async function bundle(entry, platform, external = []) {
 
 async function main() {
   const extension = await bundle(path.join(root, 'extension.js'), 'node', [
-    'vscode', '@8crafter/leveldb-zlib', 'mcbe-leveldb'
+    'vscode', '@8crafter/leveldb-zlib', 'mcbe-leveldb', 'jszip'
   ]);
   obfuscate(extension, path.join(root, 'dist', 'extension.js'));
 

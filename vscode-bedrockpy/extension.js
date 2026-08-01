@@ -4,12 +4,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const JSZip = require('jszip');
-const { LevelDB } = require('@8crafter/leveldb-zlib');
-const {
-  entryContentTypeToFormatMap,
-  generateChunkKeyFromIndices,
-  offsetToChunkBlockIndex
-} = require('mcbe-leveldb');
 
 const running = new Map();
 let diagnostics;
@@ -111,6 +105,14 @@ async function addDirectoryToZip(zip, directory, prefix = '') {
 }
 
 async function createMcworld(data, target, onProgress = () => {}) {
+  // 네이티브 LevelDB는 확장 활성화 시점이 아니라 이 기능을 실제 사용할 때만 로드한다.
+  // 플랫폼 바이너리 문제가 생겨도 다른 BedrockPy 명령 등록에는 영향을 주지 않는다.
+  const { LevelDB } = require('@8crafter/leveldb-zlib');
+  const {
+    entryContentTypeToFormatMap,
+    generateChunkKeyFromIndices,
+    offsetToChunkBlockIndex
+  } = require('mcbe-leveldb');
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bedrockpy-mcworld-'));
   const dbPath = path.join(tempRoot, 'db');
   await fs.promises.mkdir(dbPath, { recursive: true });
@@ -257,7 +259,6 @@ function structureEditorHtml(webview, context) {
       <div class="spacer"></div>
       <button class="icon-button" id="undo" title="실행 취소">↶</button>
       <button class="icon-button" id="redo" title="다시 실행">↷</button>
-      <button class="primary" id="insert">현재 .bpy에 삽입</button>
       <button id="export">.bpy로 내보내기</button>
       <button id="export-mcworld">.mcworld로 내보내기</button>
     </header>
@@ -1035,16 +1036,80 @@ async function sendTexturePack(panel, context, cacheName, label) {
   return true;
 }
 
+async function getVanillaTextureManifest() {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'BedrockPy-VSCode'
+  };
+  const releaseResponse = await fetch('https://api.github.com/repos/Mojang/bedrock-samples/releases/latest', { headers });
+  if (!releaseResponse.ok) throw new Error(`Mojang 릴리스 조회 실패: HTTP ${releaseResponse.status}`);
+  const release = await releaseResponse.json();
+  const ref = String(release.tag_name || '').trim();
+  if (!ref) throw new Error('Mojang 최신 릴리스 태그를 찾지 못했습니다.');
+  const treeResponse = await fetch(
+    `https://api.github.com/repos/Mojang/bedrock-samples/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+    { headers }
+  );
+  if (!treeResponse.ok) throw new Error(`Mojang 파일 목록 조회 실패: HTTP ${treeResponse.status}`);
+  const tree = await treeResponse.json();
+  if (tree.truncated) throw new Error('Mojang 리소스팩 파일 목록이 잘렸습니다. 잠시 후 다시 시도해 주세요.');
+  const files = (tree.tree || []).filter(entry => entry.type === 'blob' && (
+    entry.path === 'resource_pack/blocks.json' ||
+    entry.path === 'resource_pack/textures/terrain_texture.json' ||
+    /^resource_pack\/textures\/blocks\/.*\.(?:png|tga)$/i.test(entry.path)
+  ));
+  if (!files.some(entry => entry.path === 'resource_pack/blocks.json') ||
+      !files.some(entry => entry.path === 'resource_pack/textures/terrain_texture.json') ||
+      !files.some(entry => /\.png$/i.test(entry.path))) {
+    throw new Error('Mojang 릴리스에서 필요한 블록 텍스처 파일을 찾지 못했습니다.');
+  }
+  return { ref, files };
+}
+
+async function downloadVanillaTextures(manifest, destination, onProgress = () => {}) {
+  const files = manifest.files;
+  let nextIndex = 0;
+  let completed = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= files.length) return;
+      const entry = files[index];
+      const encodedPath = entry.path.split('/').map(encodeURIComponent).join('/');
+      const url = `https://raw.githubusercontent.com/Mojang/bedrock-samples/${encodeURIComponent(manifest.ref)}/${encodedPath}`;
+      const response = await fetch(url, { headers: { 'User-Agent': 'BedrockPy-VSCode' } });
+      if (!response.ok) throw new Error(`텍스처 다운로드 실패 (${entry.path}): HTTP ${response.status}`);
+      const target = path.join(destination, ...entry.path.split('/'));
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, Buffer.from(await response.arrayBuffer()));
+      completed++;
+      if (completed % 100 === 0 || completed === files.length) onProgress(completed, files.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 12 }, () => worker()));
+}
+
 async function installVanillaTextures(panel, context, force = false) {
   const cache = textureCachePath(context, 'vanilla');
-  if (force && fs.existsSync(cache)) fs.rmSync(cache, { recursive: true, force: true });
-  if (!findResourcePackRoot(cache)) {
+  if (force || !findResourcePackRoot(cache)) {
     panel.webview.postMessage({ type: 'texturePackStatus', status: 'loading', label: 'Mojang Vanilla' });
-    fs.mkdirSync(path.dirname(cache), { recursive: true });
-    await runFile('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse',
-      'https://github.com/Mojang/bedrock-samples.git', cache]);
-    await runFile('git', ['-C', cache, 'sparse-checkout', 'set', '--no-cone',
-      '/resource_pack/textures/blocks/', '/resource_pack/textures/terrain_texture.json', '/resource_pack/blocks.json']);
+    const staging = `${cache}.download-${Date.now()}`;
+    await fs.promises.mkdir(path.dirname(cache), { recursive: true });
+    try {
+      const manifest = await getVanillaTextureManifest();
+      await downloadVanillaTextures(manifest, staging, (completed, total) => {
+        panel.webview.postMessage({
+          type: 'texturePackStatus',
+          status: 'loading',
+          label: `Mojang Vanilla ${completed.toLocaleString()} / ${total.toLocaleString()}`
+        });
+      });
+      await fs.promises.rm(cache, { recursive: true, force: true });
+      await fs.promises.rename(staging, cache);
+    } catch (error) {
+      await fs.promises.rm(staging, { recursive: true, force: true });
+      throw error;
+    }
   }
   await sendTexturePack(panel, context, 'vanilla', 'Mojang Vanilla');
 }
@@ -1450,25 +1515,6 @@ async function openStructureEditor(context, initialUri) {
       }
       return;
     }
-    if (message.type === 'insert') {
-      const editor = vscode.window.visibleTextEditors.find(item => item.document.languageId === 'bedrockpy');
-      if (!editor) {
-        vscode.window.showWarningMessage('삽입할 .bpy 파일을 먼저 열어 주세요.');
-        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId, error: '삽입할 .bpy 파일이 열려 있지 않습니다.' });
-        return;
-      }
-      try {
-        structurePanel.webview.postMessage({ type: 'bpyOperationProgress', operationId: message.operationId, percent: 94, detail: '.bpy 편집기에 삽입 중…' });
-        const end = editor.document.lineAt(editor.document.lineCount - 1).range.end;
-        const prefix = editor.document.getText().endsWith('\n') ? '\n' : '\n\n';
-        await editor.edit(edit => edit.insert(end, prefix + message.code));
-        await vscode.window.showTextDocument(editor.document, editor.viewColumn || vscode.ViewColumn.One);
-        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId });
-      } catch (error) {
-        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId, error: error.message });
-        vscode.window.showErrorMessage(`.bpy 파일에 삽입할 수 없습니다: ${error.message}`);
-      }
-    }
   });
 }
 
@@ -1783,4 +1829,11 @@ function deactivate() {
   for (const child of running.values()) child.kill();
 }
 
-module.exports = { activate, deactivate, decodeMcstructure, createMcworld };
+module.exports = {
+  activate,
+  deactivate,
+  decodeMcstructure,
+  createMcworld,
+  getVanillaTextureManifest,
+  downloadVanillaTextures
+};

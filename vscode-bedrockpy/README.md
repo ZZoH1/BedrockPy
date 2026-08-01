@@ -108,7 +108,7 @@ Minecraft Bedrock 함수 팩용 BedrockPy 언어의 공식 VS Code 확장입니�
 - A/B 선택 도구: 직육면체 영역 지정
 - 선택 채우기·비우기, Y축 회전, X/Z 대칭
 - `.bpstructure`로 저장 후 다시 편집
-- `현재 .bpy에 삽입` 또는 `.bpy로 내보내기`
+- `.bpy로 내보내기`
 
 내보낼 때 연속된 동일 블록은 가능한 범위에서 `/fill` 명령으로 합쳐지고 단일 블록만 `/setblock`으로 생성됩니다.
 

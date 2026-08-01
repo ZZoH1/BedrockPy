@@ -1495,3 +1495,16 @@
 # 0.136.0
 
 - Removed the 3D editor detach-to-new-window button and its command handling.
+# 0.136.1
+
+- Fixed extension activation by loading the native Bedrock LevelDB module only when `.mcworld` export is requested.
+# 0.136.2
+
+- Fixed extension activation by excluding JSZip and its dependencies from code obfuscation.
+# 0.137.0
+
+- Removed the `현재 .bpy에 삽입` action from the 3D structure editor.
+# 0.137.1
+
+- Removed the Git requirement from Mojang vanilla texture installation.
+- Vanilla textures now download the required files directly from the latest official `bedrock-samples` release.
