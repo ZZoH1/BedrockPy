@@ -1508,3 +1508,22 @@
 
 - Removed the Git requirement from Mojang vanilla texture installation.
 - Vanilla textures now download the required files directly from the latest official `bedrock-samples` release.
+# 0.137.2
+
+- Fixed `.mcworld` export failing with `Cannot find module 'debug'` in Marketplace installations.
+- Included the complete runtime dependency chain required by the native Bedrock LevelDB module.
+- Restored block picking across the full configured render distance for structures larger than 100,000 blocks.
+- Hid placement-shape controls while using the text, image, and 3D model special tools.
+- Included `lodash.reduce` and the remaining ProtoDef runtime dependency chain required by `.mcworld` export.
+
+# 0.138.0
+
+- Added configurable X/Y/Z base coordinates, defaulting to `0, 0, 0`.
+- Applied base coordinates to `.mcworld` block placement and world spawn positioning.
+- Added relative and absolute coordinate modes for `.bpy` export.
+- Opened the 3D structure editor automatically in a separate VS Code window.
+- Applied the configured base coordinates to the top-right cursor and Play-mode position display.
+- Changed exported `.mcworld` files to the Bedrock void generator so every newly explored chunk remains empty.
+- Set the exported world spawn to the configured base coordinates instead of placing it above the workspace height.
+- Closed the blocking load overlay as soon as structure data is ready while nearby chunks continue rendering in the background.
+- Displayed the project-file loading overlay immediately on click, before extension-side file reading begins.

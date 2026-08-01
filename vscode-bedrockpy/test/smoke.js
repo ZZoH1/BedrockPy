@@ -64,8 +64,20 @@ assert.ok(pkg.contributes.commands.some(command => command.command === 'bedrockp
 assert.ok(pkg.files.includes('media/bedrockpy-logo-128.png'));
 assert.ok(pkg.files.includes('media/voxel-editor.bundle.js'));
 assert.strictEqual(pkg.dependencies['@8crafter/leveldb-zlib'], '^1.6.0');
+for (const runtimeModule of [
+  'debug', 'ms', 'bindings', 'file-uri-to-path', 'lodash.reduce',
+  'protodef-validator', 'fast-deep-equal', 'fast-json-stable-stringify',
+  'uri-js', 'punycode', 'abort-controller', 'event-target-shim', 'buffer',
+  'base64-js', 'ieee754', 'events', 'process'
+]) {
+  assert.ok(pkg.files.includes(`node_modules/${runtimeModule}/**`));
+}
 assert.ok(extensionSource.includes("message.type === 'exportMcworld'"));
 assert.ok(extensionSource.includes('createMcworld(message.data'));
+assert.ok(extensionSource.includes("nbtInt('Generator', 5)"));
+assert.ok(extensionSource.includes("nbtString('FlatWorldLayers', voidLayers)"));
+assert.ok(extensionSource.includes("block_name: 'minecraft:air'"));
+assert.ok(extensionSource.includes('y: baseCoordinate.y'));
 assert.ok(extensionSource.includes("generateChunkKeyFromIndices(indices, 'SubChunkPrefix')"));
 assert.ok(extensionSource.includes("createWebviewPanel("));
 assert.ok(extensionSource.includes("bedrockpyStructureEditor"));
@@ -77,9 +89,15 @@ assert.ok(extensionSource.includes('id="block-category-tabs"'));
 assert.ok(extensionSource.includes('data-block-category="redstone"'));
 assert.ok(extensionSource.includes('id="palette-view-toggle"'));
 assert.ok(extensionSource.includes('class="field tool-detail" data-tool-detail="generate:cylinder generate:mountain"'));
+assert.ok(extensionSource.includes('data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:mountain"'));
+assert.ok(!extensionSource.includes('<div class="tool-detail" data-tool-detail="place generate:*">'));
 assert.ok(extensionSource.includes('class="check-field tool-detail" data-tool-detail="generate:cylinder"><input id="shape-hollow"'));
 assert.ok(!extensionSource.includes('id="new-window-editor"'));
-assert.ok(!extensionSource.includes("workbench.action.moveEditorToNewWindow"));
+assert.ok(extensionSource.includes("workbench.action.moveEditorToNewWindow"));
+assert.ok(extensionSource.includes('id="base-x"'));
+assert.ok(extensionSource.includes('id="base-y"'));
+assert.ok(extensionSource.includes('id="base-z"'));
+assert.ok(extensionSource.includes('id="bpy-coordinate-mode"'));
 assert.ok(!extensionSource.includes('id="insert"'));
 assert.ok(!extensionSource.includes("message.type === 'insert'"));
 assert.ok(extensionSource.includes('async function getVanillaTextureManifest()'));
@@ -96,6 +114,8 @@ assert.ok(blockRegistry.length > 1300);
 assert.ok(blockRegistry.includes('minecraft:stone'));
 const voxelSource = fs.readFileSync(path.join(root, 'media', 'voxel-editor.js'), 'utf8');
 assert.ok(voxelSource.includes('function noteCameraMotion'));
+assert.ok(voxelSource.includes('const maximumPickDistance = renderDistanceBlocks() + renderChunkSize'));
+assert.ok(!voxelSource.includes('Math.min(renderDistanceBlocks() + renderChunkSize, 96)'));
 assert.ok(voxelSource.includes('cameraHoverRefreshPending'));
 assert.ok(voxelSource.includes('function sharedChunkMaterial'));
 assert.ok(voxelSource.includes('maximumPickDistance'));
@@ -133,6 +153,11 @@ assert.ok(voxelSource.includes('async function createTrackedBlockMapFromBlocks('
 assert.ok(voxelSource.includes('Map.prototype.set.call(map, position, type)'));
 assert.ok(voxelSource.includes('performance.now() - batchStartedAt >= 12'));
 assert.ok(voxelSource.includes('rawBlocks.length >= 5000'));
+assert.ok(/structureDataLoading = false;[\s\S]*?structureMeshLoadingProgress = false;[\s\S]*?hideBpyProgress\(\);[\s\S]*?rebuild\(true\);/.test(voxelSource));
+assert.ok(voxelSource.includes('updateBpyProgress(1, `${entry.name} 파일 읽는 중…`, "구조물 불러오는 중")'));
+assert.ok(voxelSource.includes('message.type === "projectOpenFailed"'));
+assert.ok(extensionSource.includes("type: 'projectOpenFailed'"));
+assert.ok(!voxelSource.includes('if (showProgress) updateBpyProgress(76, "가까운 청크부터 화면 생성 중…"'));
 assert.ok(voxelSource.includes('if (!structureDataLoading) {'));
 assert.ok(voxelSource.includes('const chunkRenderMeshes = new Map()'));
 assert.ok(voxelSource.includes('const blockChunkCounts = new Map()'));
@@ -150,7 +175,8 @@ assert.ok(voxelSource.includes('let playCoordinatePrecise = true'));
 assert.ok(/cursor-coordinate"\)\?\.addEventListener\("click"[\s\S]*?playCoordinatePrecise = !playCoordinatePrecise/.test(voxelSource));
 assert.ok(voxelSource.includes('Number(value).toFixed(2)'));
 assert.ok(voxelSource.includes('precise ? Math.floor(Number(value)) : value'));
-assert.ok(voxelSource.includes('`X ${coordinate(cell.x)} · Y ${coordinate(cell.y)} · Z ${coordinate(cell.z)}`'));
+assert.ok(voxelSource.includes('x: Number(cell.x) + baseCoordinate.x'));
+assert.ok(voxelSource.includes('`X ${coordinate(worldCell.x)} · Y ${coordinate(worldCell.y)} · Z ${coordinate(worldCell.z)}`'));
 assert.ok(voxelCss.includes('pointer-events: auto; cursor: pointer'));
 assert.ok(voxelSource.includes('function beginCameraDrag(event, mode = "camera")'));
 assert.ok(extensionSource.includes('id="bpy-progress"'));
@@ -170,6 +196,10 @@ assert.ok(voxelSource.includes('previewInterval - (performance.now() - lastLiveE
 assert.ok(voxelSource.includes('let radius = 5'));
 assert.ok(!voxelSource.includes('radius = Math.max(8, Math.max(workspaceSize.x'));
 assert.ok(voxelSource.includes('functionName: normalizedFunctionName('));
+assert.ok(voxelSource.includes('baseCoordinate: { ...baseCoordinate }'));
+assert.ok(voxelSource.includes('bpyCoordinateMode: document.getElementById("bpy-coordinate-mode")'));
+assert.ok(voxelSource.includes('const absoluteCoordinates = document.getElementById("bpy-coordinate-mode")?.value === "absolute"'));
+assert.ok(voxelSource.includes('String(baseCoordinate[axis] + value)'));
 assert.ok(voxelSource.includes('function defaultFunctionNameForFile(fileName)'));
 assert.ok(voxelSource.includes('data.functionName'));
 assert.ok(voxelSource.includes('document.getElementById("function-name")?.addEventListener("input"'));
@@ -187,8 +217,9 @@ assert.ok(voxelSource.includes('const maximumFillHeight = Math.max(1, Math.floor
 assert.ok(voxelSource.includes('run tickingarea add'));
 assert.ok(voxelSource.includes('/tickingarea remove'));
 assert.ok(voxelSource.includes('/summon ender_crystal ~ ~1000 ~'));
-assert.ok(voxelSource.includes('positioned ~ ~-1000 ~ run setblock'));
-assert.ok(voxelSource.includes('positioned ~ ~-1000 ~ run fill'));
+assert.ok(voxelSource.includes('`    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run `'));
+assert.ok(voxelSource.includes('`${commandPrefix}setblock ${start} ${cuboid.type}`'));
+assert.ok(voxelSource.includes('`${commandPrefix}fill ${start} ${end} ${cuboid.type}`'));
 assert.ok(voxelSource.includes('/kill @e[type=ender_crystal,tag=${anchorTag}]'));
 assert.ok(extensionSource.includes("type: 'bpyOperationComplete'"));
 assert.ok(/tool === "selectBox"[\s\S]*?if \(!cell \|\| !valid\(cell\)\) \{[\s\S]*?beginCameraDrag\(event\)/.test(voxelSource));

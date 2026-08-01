@@ -3,6 +3,7 @@ import allBedrockBlocks from "./bedrock-blocks.json";
 
 const vscode = acquireVsCodeApi();
 let workspaceSize = { x: 32, y: 32, z: 32 };
+let baseCoordinate = { x: 0, y: 0, z: 0 };
 const blockTypes = {
   stone: { label: "Stone", color: 0x7d8586 },
   dirt: { label: "Dirt", color: 0x866043 },
@@ -1545,9 +1546,7 @@ function pick(event, adjacent = false) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const maximumPickDistance = blocks.size > 100000
-    ? Math.min(renderDistanceBlocks() + renderChunkSize, 96)
-    : renderDistanceBlocks() + renderChunkSize;
+  const maximumPickDistance = renderDistanceBlocks() + renderChunkSize;
   raycaster.far = maximumPickDistance;
   const pickMeshes = blocks.size > 100000
     ? renderedMeshes.filter(mesh => chunkDistanceToCamera(mesh.userData.chunkKey) <= maximumPickDistance)
@@ -1671,8 +1670,13 @@ function updateCursorCoordinate(cell, precise = false) {
   const coordinate = value => useDecimals
     ? Number(value).toFixed(2)
     : precise ? Math.floor(Number(value)) : value;
-  label.textContent = cell
-    ? `X ${coordinate(cell.x)} · Y ${coordinate(cell.y)} · Z ${coordinate(cell.z)}`
+  const worldCell = cell && {
+    x: Number(cell.x) + baseCoordinate.x,
+    y: Number(cell.y) + baseCoordinate.y,
+    z: Number(cell.z) + baseCoordinate.z
+  };
+  label.textContent = worldCell
+    ? `X ${coordinate(worldCell.x)} · Y ${coordinate(worldCell.y)} · Z ${coordinate(worldCell.z)}`
     : "X — · Y — · Z —";
   if (precise) {
     label.dataset.coordinateMode = useDecimals ? "decimal" : "integer";
@@ -4324,10 +4328,13 @@ document.getElementById("clear-all").addEventListener("click", () => {
 });
 
 function serialize() {
+  baseCoordinate = readBaseCoordinate();
   return {
     version: 1,
     functionName: normalizedFunctionName(document.getElementById("function-name")?.value),
     size: { ...workspaceSize },
+    baseCoordinate: { ...baseCoordinate },
+    bpyCoordinateMode: document.getElementById("bpy-coordinate-mode")?.value === "absolute" ? "absolute" : "relative",
     blocks: [...blocks.entries()].map(([position, type]) => {
       const [x, y, z] = position.split(",").map(Number);
       return { x, y, z, type };
@@ -4360,6 +4367,28 @@ function normalizedSize(value) {
   };
   const side = THREE.MathUtils.clamp(Number(value) || 32, 1, 512);
   return { x: side, y: side, z: side };
+}
+
+function normalizedBaseCoordinate(value) {
+  return {
+    x: Math.trunc(Number(value?.x) || 0),
+    y: Math.trunc(Number(value?.y) || 0),
+    z: Math.trunc(Number(value?.z) || 0)
+  };
+}
+
+function readBaseCoordinate() {
+  return normalizedBaseCoordinate({
+    x: document.getElementById("base-x")?.value,
+    y: document.getElementById("base-y")?.value,
+    z: document.getElementById("base-z")?.value
+  });
+}
+
+function syncBaseCoordinateInputs() {
+  document.getElementById("base-x").value = baseCoordinate.x;
+  document.getElementById("base-y").value = baseCoordinate.y;
+  document.getElementById("base-z").value = baseCoordinate.z;
 }
 
 function syncSizeInputs() {
@@ -4401,6 +4430,8 @@ async function loadStructure(data, fileName) {
   await nextUiFrame();
   activeUndoChanges = null;
   workspaceSize = normalizedSize(data.size);
+  baseCoordinate = normalizedBaseCoordinate(data.baseCoordinate);
+  document.getElementById("bpy-coordinate-mode").value = data.bpyCoordinateMode === "absolute" ? "absolute" : "relative";
   document.getElementById("function-name").value = normalizedFunctionName(
     data.functionName,
     defaultFunctionNameForFile(fileName)
@@ -4416,13 +4447,14 @@ async function loadStructure(data, fileName) {
   selectionMask.clear();
   rebuildWorkspaceGuides();
   syncSizeInputs();
+  syncBaseCoordinateInputs();
   target.set(workspaceSize.x / 2, Math.min(workspaceSize.y / 3, 12), workspaceSize.z / 2);
   radius = 5;
   updateCamera();
   forceFullRebuildPending = true;
   structureDataLoading = false;
-  structureMeshLoadingProgress = showProgress;
-  if (showProgress) updateBpyProgress(76, "가까운 청크부터 화면 생성 중…", "큰 구조물 불러오는 중");
+  structureMeshLoadingProgress = false;
+  hideBpyProgress();
   rebuild(true);
 }
 
@@ -4433,6 +4465,14 @@ document.getElementById("function-name")?.addEventListener("input", () => {
 document.getElementById("function-name")?.addEventListener("change", event => {
   event.target.value = normalizedFunctionName(event.target.value);
 });
+for (const id of ["base-x", "base-y", "base-z", "bpy-coordinate-mode"]) {
+  document.getElementById(id)?.addEventListener("change", () => {
+    baseCoordinate = readBaseCoordinate();
+    markCurrentProjectFileDirty();
+    document.getElementById("dirty-state").textContent = "수정됨";
+    refreshHover();
+  });
+}
 
 document.getElementById("apply-size")?.addEventListener("click", () => applyWorkspaceSize({
   x: document.getElementById("size-x").value,
@@ -4558,6 +4598,11 @@ async function compileCuboids(onProgress) {
 async function generateCode() {
   const functionName = normalizedFunctionName(document.getElementById("function-name").value);
   document.getElementById("function-name").value = functionName;
+  baseCoordinate = readBaseCoordinate();
+  const absoluteCoordinates = document.getElementById("bpy-coordinate-mode")?.value === "absolute";
+  const exportedCoordinate = (value, axis) => absoluteCoordinates
+    ? String(baseCoordinate[axis] + value)
+    : relative(value);
   const cuboids = await compileCuboids((percent, detail) => updateBpyProgress(percent, detail));
   updateBpyProgress(86, `${cuboids.length.toLocaleString()}개 명령 생성 중…`);
   await nextUiFrame();
@@ -4585,11 +4630,14 @@ async function generateCode() {
     }
   }
   const commandForCuboid = cuboid => {
-    const start = `${relative(cuboid.x0)} ${relative(cuboid.y0)} ${relative(cuboid.z0)}`;
+    const start = `${exportedCoordinate(cuboid.x0, "x")} ${exportedCoordinate(cuboid.y0, "y")} ${exportedCoordinate(cuboid.z0, "z")}`;
+    const commandPrefix = absoluteCoordinates
+      ? "    /"
+      : `    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run `;
     if (cuboid.x0 === cuboid.x1 && cuboid.y0 === cuboid.y1 && cuboid.z0 === cuboid.z1)
-      return `    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run setblock ${start} ${cuboid.type}`;
-    const end = `${relative(cuboid.x1)} ${relative(cuboid.y1)} ${relative(cuboid.z1)}`;
-    return `    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run fill ${start} ${end} ${cuboid.type}`;
+      return `${commandPrefix}setblock ${start} ${cuboid.type}`;
+    const end = `${exportedCoordinate(cuboid.x1, "x")} ${exportedCoordinate(cuboid.y1, "y")} ${exportedCoordinate(cuboid.z1, "z")}`;
+    return `${commandPrefix}fill ${start} ${end} ${cuboid.type}`;
   };
   const commands = [];
   const tiles = [...tiledCuboids.entries()];
@@ -4597,7 +4645,7 @@ async function generateCode() {
   const anchorTag = `${areaBaseName.slice(0, 30)}_anchor`;
   const anchorAreaName = `${areaBaseName}_anchor`;
   const anchorSelector = `@e[type=ender_crystal,tag=${anchorTag},c=1]`;
-  if (tiles.length) {
+  if (tiles.length && !absoluteCoordinates) {
     commands.push("    /summon ender_crystal ~ ~1000 ~");
     commands.push(
       `    /execute positioned ~ ~1000 ~ run tag @e[type=ender_crystal,r=0.2,c=1,tag=!${anchorTag}] add ${anchorTag}`
@@ -4616,8 +4664,11 @@ async function generateCode() {
       const x1 = Math.min(workspaceSize.x - 1, x0 + tickingTileSize - 1);
       const z1 = Math.min(workspaceSize.z - 1, z0 + tickingTileSize - 1);
       commands.push(
-        `    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run tickingarea add ` +
-        `${relative(x0)} ~ ${relative(z0)} ${relative(x1)} ~ ${relative(z1)} ${areaName} true`
+        absoluteCoordinates
+          ? `    /tickingarea add ${exportedCoordinate(x0, "x")} ${baseCoordinate.y} ${exportedCoordinate(z0, "z")} ` +
+            `${exportedCoordinate(x1, "x")} ${baseCoordinate.y} ${exportedCoordinate(z1, "z")} ${areaName} true`
+          : `    /execute at ${anchorSelector} positioned ~ ~-1000 ~ run tickingarea add ` +
+            `${relative(x0)} ~ ${relative(z0)} ${relative(x1)} ~ ${relative(z1)} ${areaName} true`
       );
     });
     // 영역마다 고유 이름을 사용하고 청크가 준비될 시간을 20틱 확보한다.
@@ -4625,7 +4676,7 @@ async function generateCode() {
     batch.forEach(([, fragments]) => fragments.forEach(fragment => commands.push(commandForCuboid(fragment))));
     commands.push(`    /tickingarea remove ${areaName}`);
   }
-  if (tiles.length) {
+  if (tiles.length && !absoluteCoordinates) {
     commands.push(`    /kill @e[type=ender_crystal,tag=${anchorTag}]`);
     commands.push(`    /tickingarea remove ${anchorAreaName}`);
   }
@@ -4730,12 +4781,14 @@ function renderProjectTree(message) {
     dirtyMarker.title = "저장되지 않은 변경사항";
     dirtyMarker.hidden = !dirtyProjectPaths.has(entry.path);
     row.append(icon, name, dirtyMarker);
-    row.addEventListener("click", () => {
+    row.addEventListener("click", async () => {
       selectedProjectPath = entry.path;
       document.querySelectorAll(".project-entry").forEach(item => item.classList.toggle("selected", item.dataset.path === selectedProjectPath));
       if (entry.structure) {
         if (entry.path === currentProjectPath) return;
         stashCurrentProjectDraft();
+        updateBpyProgress(1, `${entry.name} 파일 읽는 중…`, "구조물 불러오는 중");
+        await nextUiFrame();
         vscode.postMessage({
           type: "projectOpenFile",
           path: entry.path,
@@ -4922,6 +4975,7 @@ window.addEventListener("message", event => {
     if (message.projectPath) currentProjectPath = message.projectPath;
     loadStructure(message.data, message.fileName);
   }
+  if (message.type === "projectOpenFailed") hideBpyProgress();
   if (message.type === "project") renderProjectTree(message);
   if (message.type === "projectEntryRenamed") {
     remapProjectDraftPaths(message.oldPath, message.newPath);

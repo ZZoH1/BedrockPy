@@ -46,18 +46,26 @@ function nbtString(name, value) {
   return nbtTag(8, name, Buffer.concat([nbtName(String(value))]));
 }
 
-function createLevelDat(levelName) {
+function createLevelDat(levelName, spawn = { x: 0, y: 2, z: 0 }) {
   const now = BigInt(Math.floor(Date.now() / 1000));
+  const voidLayers = JSON.stringify({
+    biome_id: 1,
+    block_layers: [{ block_name: 'minecraft:air', count: 1 }],
+    encoding_version: 6,
+    structure_options: null,
+    world_version: 'version.post_1_18'
+  });
   const root = Buffer.concat([
     Buffer.from([10, 0, 0]),
     nbtString('LevelName', levelName),
     nbtInt('StorageVersion', 10),
-    nbtInt('Generator', 1),
+    nbtInt('Generator', 5),
+    nbtString('FlatWorldLayers', voidLayers),
     nbtInt('GameType', 1),
     nbtInt('Difficulty', 1),
-    nbtInt('SpawnX', 0),
-    nbtInt('SpawnY', 66),
-    nbtInt('SpawnZ', 0),
+    nbtInt('SpawnX', Math.trunc(Number(spawn.x) || 0)),
+    nbtInt('SpawnY', Math.trunc(Number(spawn.y) || 0)),
+    nbtInt('SpawnZ', Math.trunc(Number(spawn.z) || 0)),
     nbtByte('commandsEnabled', 1),
     nbtByte('ForceGameType', 0),
     nbtLong('LastPlayed', now),
@@ -118,14 +126,19 @@ async function createMcworld(data, target, onProgress = () => {}) {
   await fs.promises.mkdir(dbPath, { recursive: true });
   const db = new LevelDB(dbPath, { createIfMissing: true });
   const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+  const baseCoordinate = {
+    x: Math.trunc(Number(data?.baseCoordinate?.x) || 0),
+    y: Math.trunc(Number(data?.baseCoordinate?.y) || 0),
+    z: Math.trunc(Number(data?.baseCoordinate?.z) || 0)
+  };
   const subchunks = new Map();
   try {
     await db.open();
     for (let index = 0; index < blocks.length; index++) {
       const block = blocks[index];
-      const worldX = Math.trunc(Number(block.x) || 0);
-      const worldY = 64 + Math.trunc(Number(block.y) || 0);
-      const worldZ = Math.trunc(Number(block.z) || 0);
+      const worldX = baseCoordinate.x + Math.trunc(Number(block.x) || 0);
+      const worldY = baseCoordinate.y + Math.trunc(Number(block.y) || 0);
+      const worldZ = baseCoordinate.z + Math.trunc(Number(block.z) || 0);
       const chunkX = Math.floor(worldX / 16);
       const chunkZ = Math.floor(worldZ / 16);
       const subChunkIndex = Math.floor(worldY / 16);
@@ -188,7 +201,12 @@ async function createMcworld(data, target, onProgress = () => {}) {
     await db.close();
 
     const levelName = `${String(data?.functionName || 'BedrockPy Structure').replace(/[_/]+/g, ' ')} - BedrockPy`;
-    await fs.promises.writeFile(path.join(tempRoot, 'level.dat'), createLevelDat(levelName));
+    const spawn = {
+      x: baseCoordinate.x,
+      y: baseCoordinate.y,
+      z: baseCoordinate.z
+    };
+    await fs.promises.writeFile(path.join(tempRoot, 'level.dat'), createLevelDat(levelName, spawn));
     await fs.promises.writeFile(path.join(tempRoot, 'levelname.txt'), `${levelName}\n`, 'utf8');
     onProgress(85, 'mcworld 압축 중…');
     const zip = new JSZip();
@@ -369,7 +387,7 @@ function structureEditorHtml(webview, context) {
               <input id="sculpt-strength" type="range" min="1" max="8" step="1" value="1">
             </div>
           </div>
-          <div class="tool-detail" data-tool-detail="place generate:*">
+          <div class="tool-detail" data-tool-detail="place generate:sphere generate:hollow-sphere generate:circle generate:disc generate:cylinder generate:line generate:mountain">
           <div class="brush-divider">배치 도형</div>
           <div class="shape-grid">
             <button id="make-sphere" data-generator="sphere">● 구</button>
@@ -390,6 +408,13 @@ function structureEditorHtml(webview, context) {
             <label>Z<input id="size-z" type="number" min="1" max="512" value="32"></label>
           </div>
           <button id="apply-size" style="width:100%;margin-top:6px">크기 적용</button>
+          <div class="brush-divider">기준 좌표</div>
+          <div class="size-grid">
+            <label>X<input id="base-x" type="number" step="1" value="0"></label>
+            <label>Y<input id="base-y" type="number" step="1" value="0"></label>
+            <label>Z<input id="base-z" type="number" step="1" value="0"></label>
+          </div>
+          <p class="help">월드 내보내기와 절대 좌표 코드의 시작 위치입니다.</p>
         </section>
         <section class="section" data-utility="camera" data-utility-group="environment" data-utility-icon="◉" data-utility-label="환경 설정">
           <h2 class="section-title">시점 조작</h2>
@@ -625,6 +650,13 @@ function structureEditorHtml(webview, context) {
           <div class="field">
             <label for="function-name">함수 이름</label>
             <input id="function-name" value="build_structure" spellcheck="false">
+          </div>
+          <div class="field" style="margin-top:7px">
+            <label for="bpy-coordinate-mode">.bpy 좌표 방식</label>
+            <select id="bpy-coordinate-mode">
+              <option value="relative">상대 좌표</option>
+              <option value="absolute">절대 좌표</option>
+            </select>
           </div>
           <p class="help">연속된 블록은 자동으로 <kbd>/fill</kbd>로 합치고 나머지는 <kbd>/setblock</kbd>으로 생성합니다.</p>
         </section>
@@ -1147,6 +1179,9 @@ async function openStructureEditor(context, initialUri) {
     }
   );
   structurePanel.webview.html = structureEditorHtml(structurePanel.webview, context);
+  // 생성 직후 웹뷰를 명시적으로 포커스한 다음 별도 VS Code 창으로 이동한다.
+  structurePanel.reveal(vscode.ViewColumn.Beside, false);
+  await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
   structurePanel.onDidDispose(() => {
     structurePanel = undefined;
     structureUri = undefined;
@@ -1295,6 +1330,8 @@ async function openStructureEditor(context, initialUri) {
             fileName: path.basename(target.fsPath),
             projectPath: String(message.path)
           });
+        } else {
+          structurePanel.webview.postMessage({ type: 'projectOpenFailed', projectPath: String(message.path) });
         }
       }
       await listStructureProject();
