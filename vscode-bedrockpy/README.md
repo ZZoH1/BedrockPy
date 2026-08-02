@@ -45,6 +45,83 @@ Minecraft Bedrock 함수 팩용 BedrockPy 언어의 공식 VS Code 확장입니�
 2. `.bpy` 파일을 엽니다.
 3. 명령 팔레트에서 `BedrockPy: 행동 팩 컴파일` 또는 `BedrockPy: .mcpack 생성`을 실행합니다.
 
+### 새 프로젝트 권장 구조
+
+VS Code에서 프로젝트 최상위 폴더를 연 뒤 다음 구조로 시작하는 것을 권장합니다.
+
+```text
+MyBedrockProject/
+├── pack.bpy                 # 팩 이름, 네임스페이스, 출력 설정
+├── main.bpy                 # vars, init, tick 등 주요 실행 코드
+├── functions/               # 기능별 BedrockPy 코드
+│   ├── player.bpy
+│   ├── combat.bpy
+│   ├── ui.bpy
+│   └── generated/           # 3D 구조물에서 내보낸 .bpy
+├── sounds/                  # 자동 등록할 커스텀 .ogg
+│   ├── music/
+│   └── ui/
+├── assets/
+│   └── pack_icon.png        # pack.icon에 지정할 정사각형 PNG
+├── structures/              # 3D 편집용 .bpstructure
+│   ├── buildings/
+│   └── terrain/
+├── build/                   # 컴파일 결과물, 자동 생성
+├── .bedrockpy/              # 자동 버전 기록, 자동 생성
+└── .vscode/
+    └── settings.json        # 선택적인 프로젝트별 VS Code 설정
+```
+
+`build/`와 `.bedrockpy/`는 직접 만들 필요가 없습니다. `version = auto`를 사용한다면 `.bedrockpy/versions.json`은 이후 빌드에서도 보존하세요.
+
+프로젝트 최상위의 `pack.bpy`에는 빌드 설정만 모아두는 것이 관리하기 편합니다.
+
+```python
+pack:
+    name = "My Bedrock Pack"
+    description = "BedrockPy로 만든 팩"
+    namespace = "mypack"
+    icon = "assets/pack_icon.png"
+    version = auto
+    min_engine_version = [1, 21, 0]
+    output = "build/MyPackBP"
+    mcpack = "build/MyPack.mcpack"
+    mcaddon = "build/MyPack.mcaddon"
+    max_lines = 10000
+```
+
+`main.bpy`에는 생명주기 코드를 두고, 나머지 기능은 `functions/` 아래에서 나눌 수 있습니다. 별도의 `import`는 필요하지 않습니다. 컴파일러가 프로젝트 루트 아래의 모든 `.bpy`를 재귀적으로 찾아 하나의 팩으로 합칩니다.
+
+```python
+vars:
+    int tick_count = 0
+    bool enabled = true
+
+init:
+    tell @a, "팩이 로드되었습니다."
+    call player/setup
+
+tick:
+    tick_count += 1
+
+tick every 20:
+    if enabled:
+        call ui/show_status
+```
+
+함수 이름은 `player/setup`, `ui/show_status`, `combat/attack`처럼 기능별 접두어를 붙이면 프로젝트 전체의 이름 충돌을 피하기 쉽습니다.
+
+프로젝트별 설정이 필요하면 `.vscode/settings.json`을 추가합니다.
+
+```json
+{
+  "bedrockpy.projectRoot": ".",
+  "bedrockpy.pythonPath": "python3"
+}
+```
+
+`.bpstructure`는 3D 편집용 원본이므로 행동 팩에 바로 포함되지 않습니다. 3D 구조물 편집기에서 BedrockPy 코드로 내보낸 `.bpy`를 `functions/generated/`에 저장하면 다음 컴파일부터 자동으로 포함됩니다.
+
 ### 3D 구조물 편집기
 
 명령 팔레트에서 `BedrockPy: 3D 구조물 편집기 열기`를 실행합니다.
