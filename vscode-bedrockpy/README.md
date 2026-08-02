@@ -9,6 +9,7 @@ Minecraft Bedrock 함수 팩용 BedrockPy 언어의 공식 VS Code 확장입니�
 - 입력 중 실시간 문법 오류 검사와 빨간 밑줄
 - 변수 Hover에서 실제 scoreboard objective·holder 이름과 선언 위치 표시
 - 3D voxel 구조물 편집기와 `.bpstructure` 프로젝트 저장
+- 3D 구조물 레이어 추가·삭제·이름 변경·순서 변경·가시성 전환 및 위 레이어 우선 합성
 - 선택 영역 채우기·변형·실행 취소 및 `/fill` 최적화 BedrockPy 코드 내보내기
 - 상태 표시줄에 생성될 tick 명령 수와 파일 수 표시
 - 명령 팔레트에서 행동 팩 컴파일

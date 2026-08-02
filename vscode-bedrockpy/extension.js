@@ -301,6 +301,16 @@ function structureEditorHtml(webview, context) {
             <button id="delete-project-entry" class="danger">휴지통</button>
           </div>
         </section>
+        <section class="section layer-section">
+          <h2 class="section-title">레이어</h2>
+          <div class="layer-actions">
+            <button id="add-layer" title="새 레이어 추가">＋</button>
+            <button id="rename-layer" title="선택 레이어 이름 변경">이름</button>
+            <button id="delete-layer" class="danger" title="선택 레이어 삭제">−</button>
+          </div>
+          <div id="layer-list" class="layer-list"></div>
+          <p class="layer-help">레이어를 드래그해 순서를 바꿉니다. 위 레이어가 같은 위치의 아래 블록을 덮습니다.</p>
+        </section>
         <section class="section">
           <h2 class="section-title">도구</h2>
           <div class="tool-grid">
@@ -840,8 +850,10 @@ async function readStructure(uri) {
     const data = isMcstructure
       ? decodeMcstructure(bytes)
       : JSON.parse(Buffer.from(bytes).toString('utf8'));
-    if (!data || (isMcstructure ? !Array.isArray(data.blocks) : !Array.isArray(data.chunks)))
-      throw new Error(isMcstructure ? 'blocks 데이터가 없습니다' : '새 chunks 형식이 아닌 .bpstructure 파일입니다');
+    if (!data || (isMcstructure ? !Array.isArray(data.blocks) : !Array.isArray(data.layers)))
+      throw new Error(isMcstructure
+        ? 'blocks 데이터가 없습니다'
+        : 'layers 데이터가 없는 이전 형식의 .bpstructure 파일입니다');
     return data;
   } catch (error) {
     vscode.window.showErrorMessage(`구조물 파일을 열 수 없습니다: ${error.message}`);
@@ -851,7 +863,15 @@ async function readStructure(uri) {
 
 async function sendStructure(panel, uri) {
   if (!uri) {
-    panel.webview.postMessage({ type: 'load', data: { size: { x: 32, y: 32, z: 32 }, blockTypes: {}, chunks: [] }, fileName: '새 구조물' });
+    panel.webview.postMessage({
+      type: 'load',
+      data: {
+        size: { x: 32, y: 32, z: 32 },
+        layers: [{ id: 'layer-1', name: '레이어 1', visible: true, blocks: [] }],
+        activeLayerId: 'layer-1'
+      },
+      fileName: '새 구조물'
+    });
     return;
   }
   const data = await readStructure(uri);
@@ -1273,6 +1293,20 @@ async function openStructureEditor(context, initialUri) {
       });
       return;
     }
+    if (message.type === 'confirmLayerDelete') {
+      const count = Math.max(0, Number(message.blockCount) || 0);
+      const answer = await vscode.window.showWarningMessage(
+        `'${String(message.name || '레이어')}'에 블록 ${count.toLocaleString()}개가 있습니다. 정말 삭제할까요?`,
+        { modal: true },
+        '레이어 삭제'
+      );
+      structurePanel.webview.postMessage({
+        type: 'layerDeleteConfirmed',
+        layerId: String(message.layerId || ''),
+        confirmed: answer === '레이어 삭제'
+      });
+      return;
+    }
     if (message.type === 'chooseBlockTextFont') {
       const selected = await vscode.window.showOpenDialog({
         canSelectFiles: true,
@@ -1483,7 +1517,11 @@ async function openStructureEditor(context, initialUri) {
       } catch {}
       try {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target.fsPath)));
-        const empty = { size: { x: 32, y: 32, z: 32 }, blockTypes: {}, chunks: [] };
+        const empty = {
+          size: { x: 32, y: 32, z: 32 },
+          layers: [{ id: 'layer-1', name: '레이어 1', visible: true, blocks: [] }],
+          activeLayerId: 'layer-1'
+        };
         await vscode.workspace.fs.writeFile(target, Buffer.from(JSON.stringify(empty, null, 2) + '\n', 'utf8'));
         structureUri = target;
         await sendStructure(structurePanel, target);

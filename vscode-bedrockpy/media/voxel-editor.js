@@ -751,6 +751,41 @@ function endBulkMutation() {
 const lazyBlockChunkPayloads = new Map();
 const dirtyBlockDataChunks = new Set();
 let logicalBlockCount = 0;
+let layers = [{ id: "layer-1", name: "레이어 1", visible: true, blocks: new Map() }];
+let activeLayerId = "layer-1";
+let nextLayerNumber = 2;
+let layerEditingEnabled = false;
+let layerCompositionWrite = false;
+let activeLayerUndoChanges = null;
+let activeUndoLayerId = null;
+
+function activeLayer() {
+  return layers.find(layer => layer.id === activeLayerId) || layers.at(-1);
+}
+
+function composedLayerValue(position) {
+  for (let index = layers.length - 1; index >= 0; index--) {
+    const layer = layers[index];
+    if (layer.visible && layer.blocks.has(position)) return layer.blocks.get(position);
+  }
+  return null;
+}
+
+function writeComposedBlock(map, position, value) {
+  layerCompositionWrite = true;
+  try {
+    if (value == null) map.delete(position);
+    else map.set(position, value);
+  } finally {
+    layerCompositionWrite = false;
+  }
+}
+
+function recordLayerUndo(position, layer) {
+  if (!activeLayerUndoChanges || !layer || activeUndoLayerId !== layer.id ||
+      activeLayerUndoChanges.has(position)) return;
+  activeLayerUndoChanges.set(position, layer.blocks.get(position) ?? null);
+}
 
 function blockPositionChunkKey(position) {
   const [x, y, z] = String(position).split(",").map(Number);
@@ -859,6 +894,14 @@ class TrackedBlockMap extends Map {
   }
 
   set(position, type) {
+    if (layerEditingEnabled && !layerCompositionWrite) {
+      const layer = activeLayer();
+      if (!layer) return this;
+      recordLayerUndo(position, layer);
+      layer.blocks.set(position, type);
+      writeComposedBlock(this, position, composedLayerValue(position));
+      return this;
+    }
     const previous = this.get(position);
     super.set(position, type);
     if (previous !== type) {
@@ -888,6 +931,14 @@ class TrackedBlockMap extends Map {
   }
 
   delete(position) {
+    if (layerEditingEnabled && !layerCompositionWrite) {
+      const layer = activeLayer();
+      if (!layer) return false;
+      recordLayerUndo(position, layer);
+      const deleted = layer.blocks.delete(position);
+      writeComposedBlock(this, position, composedLayerValue(position));
+      return deleted;
+    }
     if (!this.has(position)) return false;
     const previous = this.get(position);
     if (activeUndoChanges && !activeUndoChanges.has(position)) {
@@ -1012,6 +1063,7 @@ function createLazyTrackedBlockMap(data) {
 }
 
 let blocks = createTrackedBlockMap();
+layerEditingEnabled = true;
 let renderedMeshes = [];
 let renderedFaceCount = 0;
 let tool = "move";
@@ -1461,6 +1513,10 @@ function updateViewSettings(syncChunks = true) {
 
 function remember() {
   if (!activeUndoChanges) activeUndoChanges = new Map();
+  if (!activeLayerUndoChanges) {
+    activeLayerUndoChanges = new Map();
+    activeUndoLayerId = activeLayerId;
+  }
 }
 
 const maximumUndoTransactions = 50;
@@ -1481,29 +1537,49 @@ function trimUndoHistory() {
   }
 }
 
-function storeUndoTransaction(changes) {
-  if (!changes.length) return;
-  history.push({ changes, changeCount: changes.length / 3 });
+function storeUndoTransaction(changes, layerChanges = [], layerId = null) {
+  if (!changes.length && !layerChanges.length) return;
+  history.push({
+    changes,
+    layerChanges,
+    layerId,
+    changeCount: Math.max(changes.length, layerChanges.length) / 3
+  });
   trimUndoHistory();
   future = [];
   scheduleSelectionDisplayPatch(changes);
+  renderLayerList();
 }
 
 function commitUndoTransaction() {
-  if (!activeUndoChanges) return;
+  if (!activeUndoChanges && !activeLayerUndoChanges) return;
   const changes = [];
-  for (const [position, before] of activeUndoChanges) {
+  for (const [position, before] of activeUndoChanges || []) {
     const after = blocks.get(position) ?? null;
     if (before !== after) changes.push(position, before, after);
   }
+  const layer = layers.find(item => item.id === activeUndoLayerId);
+  const layerChanges = [];
+  for (const [position, before] of activeLayerUndoChanges || []) {
+    const after = layer?.blocks.get(position) ?? null;
+    if (before !== after) layerChanges.push(position, before, after);
+  }
+  const layerId = activeUndoLayerId;
   activeUndoChanges = null;
-  storeUndoTransaction(changes);
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
+  storeUndoTransaction(changes, layerChanges, layerId);
 }
 
 async function commitUndoTransactionAsync() {
-  if (!activeUndoChanges) return;
-  const pendingChanges = activeUndoChanges;
+  if (!activeUndoChanges && !activeLayerUndoChanges) return;
+  const pendingChanges = activeUndoChanges || new Map();
+  const pendingLayerChanges = activeLayerUndoChanges || new Map();
+  const layerId = activeUndoLayerId;
+  const layer = layers.find(item => item.id === layerId);
   activeUndoChanges = null;
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
   const changes = [];
   let frameStartedAt = performance.now();
   for (const [position, before] of pendingChanges) {
@@ -1515,7 +1591,17 @@ async function commitUndoTransactionAsync() {
       frameStartedAt = performance.now();
     }
   }
-  storeUndoTransaction(changes);
+  const layerChanges = [];
+  for (const [position, before] of pendingLayerChanges) {
+    const after = layer?.blocks.get(position) ?? null;
+    if (before !== after) layerChanges.push(position, before, after);
+    pendingLayerChanges.delete(position);
+    if (performance.now() - frameStartedAt >= 5) {
+      await nextUiFrame();
+      frameStartedAt = performance.now();
+    }
+  }
+  storeUndoTransaction(changes, layerChanges, layerId);
 }
 
 function commitUndoTransactionAdaptively() {
@@ -1531,17 +1617,94 @@ function commitUndoTransactionAdaptively() {
 
 function applyUndoTransaction(transaction, direction) {
   activeUndoChanges = null;
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
+  if (transaction.kind === "transform") {
+    restoreTransformPlacementState(direction === "undo" ? transaction.before : transaction.after);
+    return;
+  }
+  if (transaction.kind === "layer-delete") {
+    if (direction === "undo") {
+      if (!layers.some(layer => layer.id === transaction.layer.id))
+        layers.splice(Math.min(transaction.index, layers.length), 0, {
+          ...transaction.layer,
+          blocks: new Map(transaction.layer.blocks)
+        });
+      activeLayerId = transaction.activeBefore;
+    } else {
+      const index = layers.findIndex(layer => layer.id === transaction.layer.id);
+      if (index >= 0 && layers.length > 1) layers.splice(index, 1);
+      activeLayerId = layers.some(layer => layer.id === transaction.activeAfter)
+        ? transaction.activeAfter
+        : layers.at(-1).id;
+    }
+    rebuildComposedLayers(true, false);
+    return;
+  }
+  if (transaction.kind === "layer-add") {
+    if (direction === "undo") {
+      const index = layers.findIndex(layer => layer.id === transaction.layer.id);
+      if (index >= 0 && layers.length > 1) layers.splice(index, 1);
+      activeLayerId = layers.some(layer => layer.id === transaction.activeBefore)
+        ? transaction.activeBefore
+        : layers.at(-1).id;
+    } else {
+      if (!layers.some(layer => layer.id === transaction.layer.id)) {
+        layers.splice(Math.min(transaction.index, layers.length), 0, {
+          ...transaction.layer,
+          blocks: new Map(transaction.layer.blocks)
+        });
+      }
+      activeLayerId = transaction.layer.id;
+    }
+    rebuildComposedLayers(true, false);
+    return;
+  }
+  if (transaction.kind === "layer-rename") {
+    const layer = layers.find(item => item.id === transaction.layerId);
+    if (layer) layer.name = direction === "undo" ? transaction.before : transaction.after;
+    activeLayerId = transaction.layerId;
+    renderLayerList();
+    markCurrentProjectFileDirty();
+    return;
+  }
+  if (transaction.kind === "layer-visibility") {
+    const layer = layers.find(item => item.id === transaction.layerId);
+    if (layer) layer.visible = direction === "undo" ? transaction.before : transaction.after;
+    activeLayerId = transaction.layerId;
+    rebuildComposedLayers(true, false);
+    return;
+  }
+  if (transaction.kind === "layer-reorder") {
+    const order = direction === "undo" ? transaction.before : transaction.after;
+    const byId = new Map(layers.map(layer => [layer.id, layer]));
+    layers = order.map(id => byId.get(id)).filter(Boolean);
+    activeLayerId = transaction.layerId;
+    rebuildComposedLayers(true, false);
+    return;
+  }
   beginBulkMutation();
   try {
-    for (let index = 0; index < transaction.changes.length; index += 3) {
-      const position = transaction.changes[index];
-      const value = transaction.changes[index + (direction === "undo" ? 1 : 2)];
-      if (value == null) blocks.delete(position);
-      else blocks.set(position, value);
+    const layer = layers.find(item => item.id === transaction.layerId);
+    if (layer && transaction.layerChanges?.length) {
+      for (let index = 0; index < transaction.layerChanges.length; index += 3) {
+        const position = transaction.layerChanges[index];
+        const value = transaction.layerChanges[index + (direction === "undo" ? 1 : 2)];
+        if (value == null) layer.blocks.delete(position);
+        else layer.blocks.set(position, value);
+        writeComposedBlock(blocks, position, composedLayerValue(position));
+      }
+    } else {
+      for (let index = 0; index < transaction.changes.length; index += 3) {
+        const position = transaction.changes[index];
+        const value = transaction.changes[index + (direction === "undo" ? 1 : 2)];
+        writeComposedBlock(blocks, position, value);
+      }
     }
   } finally {
     endBulkMutation();
   }
+  renderLayerList();
   scheduleSelectionDisplayPatch(transaction.changes);
   scheduleEditRebuild();
 }
@@ -1573,6 +1736,248 @@ function mutate(action) {
   } else {
     scheduleEditRebuild();
   }
+}
+
+function composeVisibleLayerEntries() {
+  const composed = new Map();
+  for (const layer of layers) {
+    if (!layer.visible) continue;
+    for (const [position, type] of layer.blocks) composed.set(position, type);
+  }
+  return composed;
+}
+
+function rebuildComposedLayers(markDirty = true, resetHistory = true) {
+  const composed = composeVisibleLayerEntries();
+  layerEditingEnabled = false;
+  blocks = createTrackedBlockMap(composed);
+  layerEditingEnabled = true;
+  forceFullRebuildPending = true;
+  if (resetHistory) {
+    history = [];
+    future = [];
+  }
+  activeUndoChanges = null;
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
+  renderLayerList();
+  if (markDirty) markCurrentProjectFileDirty();
+  rebuild(true);
+}
+
+function renderLayerList() {
+  const list = document.getElementById("layer-list");
+  if (!list) return;
+  const deleteButton = document.getElementById("delete-layer");
+  if (deleteButton) deleteButton.disabled = layers.length <= 1;
+  list.replaceChildren();
+  [...layers].reverse().forEach(layer => {
+    const item = document.createElement("div");
+    item.className = `layer-item${layer.id === activeLayerId ? " active" : ""}` +
+      `${layer.visible ? "" : " hidden-layer"}`;
+    item.dataset.layerId = layer.id;
+    item.draggable = true;
+    const visibility = document.createElement("button");
+    visibility.type = "button";
+    visibility.className = "layer-visibility";
+    visibility.textContent = layer.visible ? "◉" : "○";
+    visibility.title = layer.visible ? "레이어 숨기기" : "레이어 보이기";
+    visibility.addEventListener("click", event => {
+      event.stopPropagation();
+      const before = layer.visible;
+      layer.visible = !layer.visible;
+      history.push({
+        kind: "layer-visibility",
+        layerId: layer.id,
+        before,
+        after: layer.visible,
+        changeCount: 1
+      });
+      trimUndoHistory();
+      future = [];
+      rebuildComposedLayers(true, false);
+    });
+    const name = document.createElement("span");
+    name.className = "layer-name";
+    name.textContent = layer.name;
+    name.title = layer.name;
+    const count = document.createElement("span");
+    count.className = "layer-count";
+    count.textContent = layer.blocks.size.toLocaleString();
+    item.append(visibility, name, count);
+    item.addEventListener("click", () => {
+      if (activeLayerId === layer.id) return;
+      activeLayerId = layer.id;
+      renderLayerList();
+    });
+    item.addEventListener("dblclick", () => renameActiveLayer());
+    item.addEventListener("dragstart", event => {
+      activeLayerId = layer.id;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", layer.id);
+      requestAnimationFrame(() => item.classList.add("dragging"));
+    });
+    item.addEventListener("dragover", event => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      const before = event.clientY < item.getBoundingClientRect().top + item.offsetHeight / 2;
+      list.querySelectorAll(".layer-item").forEach(row =>
+        row.classList.remove("drag-before", "drag-after")
+      );
+      item.classList.add(before ? "drag-before" : "drag-after");
+    });
+    item.addEventListener("drop", event => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer.getData("text/plain");
+      const before = event.clientY < item.getBoundingClientRect().top + item.offsetHeight / 2;
+      reorderLayerByDrop(sourceId, layer.id, before);
+    });
+    item.addEventListener("dragend", () => {
+      list.querySelectorAll(".layer-item").forEach(row =>
+        row.classList.remove("dragging", "drag-before", "drag-after")
+      );
+    });
+    list.appendChild(item);
+  });
+}
+
+function addLayer() {
+  const usedNumbers = new Set(layers.map(layer =>
+    /^레이어\s+(\d+)$/.exec(layer.name)?.[1]
+  ).filter(Boolean).map(Number));
+  let layerNumber = 2;
+  while (usedNumbers.has(layerNumber)) layerNumber++;
+  const layer = {
+    id: `layer-${Date.now()}-${layerNumber}`,
+    name: `레이어 ${layerNumber}`,
+    visible: true,
+    blocks: new Map()
+  };
+  nextLayerNumber = Math.max(nextLayerNumber, layerNumber + 1);
+  const activeBefore = activeLayerId;
+  const index = layers.length;
+  layers.push(layer);
+  activeLayerId = layer.id;
+  history.push({
+    kind: "layer-add",
+    layer: { ...layer, blocks: new Map() },
+    index,
+    activeBefore,
+    changeCount: 1
+  });
+  trimUndoHistory();
+  future = [];
+  rebuildComposedLayers(true, false);
+}
+
+function renameActiveLayer() {
+  const layer = activeLayer();
+  if (!layer) return;
+  const item = document.querySelector(`.layer-item[data-layer-id="${CSS.escape(layer.id)}"]`);
+  const label = item?.querySelector(".layer-name");
+  if (!item || !label || item.querySelector(".layer-name-input")) return;
+  const input = document.createElement("input");
+  input.className = "layer-name-input";
+  input.value = layer.name;
+  input.maxLength = 80;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = save => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    if (save && name && name !== layer.name) {
+      const before = layer.name;
+      layer.name = name.slice(0, 80);
+      history.push({
+        kind: "layer-rename",
+        layerId: layer.id,
+        before,
+        after: layer.name,
+        changeCount: 1
+      });
+      trimUndoHistory();
+      future = [];
+      markCurrentProjectFileDirty();
+    }
+    renderLayerList();
+  };
+  input.addEventListener("keydown", event => {
+    event.stopPropagation();
+    if (event.key === "Enter") finish(true);
+    if (event.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function deleteActiveLayer() {
+  if (layers.length <= 1) return;
+  const layer = activeLayer();
+  if (!layer) return;
+  if (layer.blocks.size) {
+    vscode.postMessage({
+      type: "confirmLayerDelete",
+      layerId: layer.id,
+      name: layer.name,
+      blockCount: layer.blocks.size
+    });
+    return;
+  }
+  performLayerDelete(layer.id);
+}
+
+function performLayerDelete(layerId) {
+  if (layers.length <= 1) return;
+  const layer = layers.find(item => item.id === layerId);
+  if (!layer) return;
+  const index = layers.indexOf(layer);
+  const activeBefore = activeLayerId;
+  layers.splice(index, 1);
+  activeLayerId = layers[Math.min(index, layers.length - 1)].id;
+  const activeAfter = activeLayerId;
+  rebuildComposedLayers(true, false);
+  history.push({
+    kind: "layer-delete",
+    layer: { ...layer, blocks: new Map(layer.blocks) },
+    index,
+    activeBefore,
+    activeAfter,
+    changeCount: layer.blocks.size
+  });
+  trimUndoHistory();
+  future = [];
+}
+
+function reorderLayerByDrop(sourceId, targetId, before) {
+  if (!sourceId || sourceId === targetId) {
+    renderLayerList();
+    return;
+  }
+  const orderBefore = layers.map(layer => layer.id);
+  const displayed = [...layers].reverse();
+  const sourceIndex = displayed.findIndex(layer => layer.id === sourceId);
+  if (sourceIndex < 0) return;
+  const [source] = displayed.splice(sourceIndex, 1);
+  const targetIndex = displayed.findIndex(layer => layer.id === targetId);
+  if (targetIndex < 0) return;
+  displayed.splice(targetIndex + (before ? 0 : 1), 0, source);
+  layers = displayed.reverse();
+  activeLayerId = source.id;
+  const orderAfter = layers.map(layer => layer.id);
+  if (orderBefore.some((id, index) => id !== orderAfter[index])) {
+    history.push({
+      kind: "layer-reorder",
+      layerId: source.id,
+      before: orderBefore,
+      after: orderAfter,
+      changeCount: 1
+    });
+    trimUndoHistory();
+    future = [];
+  }
+  rebuildComposedLayers(true, false);
 }
 
 let pendingGroupedRebuild = false;
@@ -2636,6 +3041,51 @@ function cancelPendingPlacement() {
   refreshHover();
 }
 
+function transformPlacementState(source, sourceTool = tool) {
+  if (!source) return null;
+  return {
+    tool: sourceTool,
+    origin: cloneCell(source.origin),
+    scale: Number(source.scale ?? 1),
+    stretch: cloneStretch(source.stretch || unitStretch()),
+    rotation: cloneRotation(source.rotation || zeroRotation()),
+    locked: true
+  };
+}
+
+function sameTransformPlacementState(first, second) {
+  return Boolean(first && second && first.tool === second.tool &&
+    key(first.origin.x, first.origin.y, first.origin.z) === key(second.origin.x, second.origin.y, second.origin.z) &&
+    first.scale === second.scale &&
+    first.stretch.x === second.stretch.x && first.stretch.y === second.stretch.y && first.stretch.z === second.stretch.z &&
+    first.rotation.x === second.rotation.x && first.rotation.y === second.rotation.y && first.rotation.z === second.rotation.z);
+}
+
+function storeTransformPlacementUndo(before, after) {
+  if (!before || !after || sameTransformPlacementState(before, after)) return;
+  history.push({ kind: "transform", before, after, changeCount: 1 });
+  trimUndoHistory();
+  future = [];
+}
+
+function restoreTransformPlacementState(state) {
+  if (!state) return;
+  pendingPlacement = null;
+  setTool(state.tool);
+  placementScale = state.scale;
+  placementStretch = cloneStretch(state.stretch);
+  placementRotation = cloneRotation(state.rotation);
+  pendingPlacement = transformPlacementState(state, state.tool);
+  const badge = document.getElementById("scale-drag-badge");
+  if (badge) {
+    badge.textContent = `${scaleText()} · ${rotationText(placementRotation)} · 우클릭 적용`;
+    badge.classList.add("visible");
+  }
+  document.getElementById("transform-gizmo")?.classList.add("visible");
+  ghostSignature = "";
+  updateGhostPreview(pendingPlacement.origin);
+}
+
 canvas.addEventListener("contextmenu", event => event.preventDefault());
 canvas.addEventListener("auxclick", event => {
   if (event.button === 1) event.preventDefault();
@@ -2698,6 +3148,7 @@ canvas.addEventListener("pointerdown", event => {
     pendingPlacement = null;
     pointerDown = {
       mode: "visualTransform",
+      tool,
       kind: visualHandle.kind,
       axis: visualHandle.axis,
       origin,
@@ -3130,14 +3581,22 @@ canvas.addEventListener("pointerup", event => {
     return;
   }
   if (pointerDown.mode === "scalePlacement" || pointerDown.mode === "visualTransform") {
+    const transformedTool = pointerDown.tool || tool;
+    const beforeTransform = transformPlacementState({
+      origin: pointerDown.baseOrigin || pointerDown.origin,
+      scale: pointerDown.baseScale,
+      stretch: pointerDown.baseStretch,
+      rotation: pointerDown.baseRotation
+    }, transformedTool);
     pendingPlacement = {
-      tool,
+      tool: transformedTool,
       origin: cloneCell(pointerDown.origin),
       scale: placementScale,
       stretch: cloneStretch(placementStretch),
       rotation: cloneRotation(placementRotation),
       locked: true
     };
+    storeTransformPlacementUndo(beforeTransform, transformPlacementState(pendingPlacement, transformedTool));
     const badge = document.getElementById("scale-drag-badge");
     if (badge) badge.textContent = `${scaleText()} · ${rotationText(placementRotation)} · 우클릭 적용`;
     pointerDown = null;
@@ -3318,9 +3777,13 @@ document.querySelectorAll("[data-transform-axis]").forEach(button => button.addE
   });
 }));
 document.getElementById("cancel-transform")?.addEventListener("click", cancelPendingPlacement);
+document.getElementById("add-layer")?.addEventListener("click", addLayer);
+document.getElementById("rename-layer")?.addEventListener("click", renameActiveLayer);
+document.getElementById("delete-layer")?.addEventListener("click", deleteActiveLayer);
+renderLayerList();
 
 const viewportPanels = document.getElementById("viewport-panels");
-document.querySelectorAll(".sidebar:not(.right) > .section:not(.project-section), .sidebar.right > .section")
+document.querySelectorAll(".sidebar:not(.right) > .section:not(.project-section):not(.layer-section), .sidebar.right > .section")
   .forEach(section => viewportPanels?.appendChild(section));
 const brushOptionsDock = document.getElementById("brush-options-dock");
 const brushPanel = document.getElementById("brush-panel");
@@ -5407,18 +5870,6 @@ function serialize() {
   const viewTarget = playMode && editorViewpointBeforePlay
     ? editorViewpointBeforePlay.target.clone()
     : target.clone();
-  const chunks = [];
-  for (const [chunkKey, count] of blockChunkCounts) {
-    if (!count) continue;
-    let data = lazyBlockChunkPayloads.get(chunkKey);
-    if (data == null) {
-      const entries = [...(blockChunkPositions.get(chunkKey) || [])]
-        .map(position => [position, Map.prototype.get.call(blocks, position)])
-        .filter(([, type]) => type != null);
-      data = encodeChunkPayload(entries, chunkKey);
-    }
-    chunks.push({ key: chunkKey, count, data });
-  }
   return {
     functionName: normalizedFunctionName(document.getElementById("function-name")?.value),
     size: { ...workspaceSize },
@@ -5441,8 +5892,15 @@ function serialize() {
       playFov: Number(document.getElementById("play-fov")?.value || 70),
       playSensitivity: Number(document.getElementById("play-sensitivity")?.value || 100)
     },
+    layers: layers.map(layer => ({
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      blocks: [...layer.blocks]
+    })),
+    activeLayerId,
     blockTypes: Object.fromEntries(blockTypeCounts),
-    chunks
+    chunks: undefined
   };
 }
 
@@ -5479,6 +5937,8 @@ function serializeFlat() {
       const [x, y, z] = position.split(",").map(Number);
       return { x, y, z, type };
     }),
+    layers: undefined,
+    activeLayerId: undefined,
     blockTypes: undefined,
     chunks: undefined
   };
@@ -5563,38 +6023,38 @@ function updateBedrockYLimitWarning() {
 
 function applyWorkspaceSize(nextSize) {
   const normalized = normalizedSize(nextSize);
-  mutate(() => {
-    workspaceSize = normalized;
-    blocks = createTrackedBlockMap([...blocks].filter(([position]) => {
+  workspaceSize = normalized;
+  for (const layer of layers) {
+    layer.blocks = new Map([...layer.blocks].filter(([position]) => {
       const [x, y, z] = position.split(",").map(Number);
       return valid({ x, y, z });
     }));
-    selectionA = selectionA && valid(selectionA) ? selectionA : null;
-    selectionB = selectionB && valid(selectionB) ? selectionB : null;
-    selectionMask = new Set([...selectionMask].filter(position => {
-      const [x, y, z] = position.split(",").map(Number);
-      return valid({ x, y, z });
-    }));
-    forceFullRebuildPending = true;
-    target.set(workspaceSize.x / 2, Math.min(workspaceSize.y / 3, 12), workspaceSize.z / 2);
-    radius = 5;
-    rebuildWorkspaceGuides();
-    syncSizeInputs();
-    updateCamera();
-  });
+  }
+  selectionA = selectionA && valid(selectionA) ? selectionA : null;
+  selectionB = selectionB && valid(selectionB) ? selectionB : null;
+  selectionMask = new Set([...selectionMask].filter(position => {
+    const [x, y, z] = position.split(",").map(Number);
+    return valid({ x, y, z });
+  }));
+  target.set(workspaceSize.x / 2, Math.min(workspaceSize.y / 3, 12), workspaceSize.z / 2);
+  radius = 5;
+  rebuildWorkspaceGuides();
+  syncSizeInputs();
+  updateCamera();
+  rebuildComposedLayers();
 }
 
 async function loadStructure(data, fileName) {
   const revision = ++structureLoadRevision;
   const rawBlocks = data.blocks || [];
-  const lazyFormat = Array.isArray(data.chunks);
-  const totalBlocks = lazyFormat
-    ? data.chunks.reduce((sum, chunk) => sum + Math.max(0, Number(chunk.count) || 0), 0)
-    : rawBlocks.length;
-  const showProgress = !lazyFormat && rawBlocks.length >= 5000;
+  const layerBlockCount = Array.isArray(data.layers)
+    ? data.layers.reduce((sum, layer) => sum + (Array.isArray(layer.blocks) ? layer.blocks.length : 0), 0)
+    : 0;
+  const totalBlocks = layerBlockCount || rawBlocks.length;
+  const showProgress = totalBlocks >= 5000;
   structureDataLoading = true;
   structureMeshLoadingProgress = false;
-  if (showProgress) updateBpyProgress(2, `${rawBlocks.length.toLocaleString()}개 블록 준비 중…`, "큰 구조물 불러오는 중");
+  if (showProgress) updateBpyProgress(2, `${totalBlocks.toLocaleString()}개 블록 준비 중…`, "큰 구조물 불러오는 중");
   await nextUiFrame();
   activeUndoChanges = null;
   workspaceSize = normalizedSize(data.size);
@@ -5603,17 +6063,53 @@ async function loadStructure(data, fileName) {
     data.functionName,
     defaultFunctionNameForFile(fileName)
   );
-  const loadedBlocks = lazyFormat
-    ? createLazyTrackedBlockMap(data)
-    : await createTrackedBlockMapFromBlocks(rawBlocks, revision, showProgress);
-  if (!loadedBlocks || revision !== structureLoadRevision) return;
+  const serializedLayers = Array.isArray(data.layers) && data.layers.length
+    ? data.layers.map((layer, index) => ({
+        id: String(layer.id || `layer-${index + 1}`),
+        name: String(layer.name || `레이어 ${index + 1}`).slice(0, 80),
+        visible: layer.visible !== false,
+        blocks: new Map(Array.isArray(layer.blocks) ? layer.blocks : [])
+      }))
+    : null;
+  layerEditingEnabled = false;
+  let loadedBlocks;
+  if (serializedLayers) {
+    layers = serializedLayers;
+    activeLayerId = layers.some(layer => layer.id === data.activeLayerId)
+      ? data.activeLayerId
+      : layers.at(-1).id;
+    nextLayerNumber = layers.length + 1;
+    loadedBlocks = createTrackedBlockMap(composeVisibleLayerEntries());
+  } else {
+    // 외부 Minecraft .mcstructure의 blocks 배열만 레이어 1로 가져온다.
+    loadedBlocks = await createTrackedBlockMapFromBlocks(rawBlocks, revision, showProgress);
+    if (loadedBlocks) {
+      ensureAllBlockChunksLoaded(loadedBlocks);
+      layers = [{
+        id: "layer-1",
+        name: "레이어 1",
+        visible: true,
+        blocks: new Map(Map.prototype.entries.call(loadedBlocks))
+      }];
+      activeLayerId = "layer-1";
+      nextLayerNumber = 2;
+    }
+  }
+  if (!loadedBlocks || revision !== structureLoadRevision) {
+    layerEditingEnabled = true;
+    return;
+  }
   blocks = loadedBlocks;
+  layerEditingEnabled = true;
   currentFile = fileName || null;
   history = [];
   future = [];
   selectionA = null;
   selectionB = null;
   selectionMask.clear();
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
+  renderLayerList();
   rebuildWorkspaceGuides();
   syncSizeInputs();
   syncBaseCoordinateInputs();
@@ -6173,6 +6669,8 @@ window.addEventListener("blur", commitPendingPlacement);
 
 window.addEventListener("message", event => {
   const message = event.data;
+  if (message.type === "layerDeleteConfirmed" && message.confirmed)
+    performLayerDelete(message.layerId);
   if (message.type === "blockTextFontLoaded") loadCustomBlockTextFont(message);
   if (message.type === "blockTextFontLoadFailed") {
     const status = document.getElementById("block-text-font-status");
