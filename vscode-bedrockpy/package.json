@@ -2,7 +2,7 @@
   "name": "bedrockpy-language",
   "displayName": "BedrockPy Language Tools",
   "description": "Minecraft Bedrock 함수 팩용 BedrockPy 언어 지원",
-  "version": "0.148.3",
+  "version": "0.149.1",
   "publisher": "bedrockpy",
   "icon": "media/bedrockpy-logo-128.png",
   "license": "MIT",

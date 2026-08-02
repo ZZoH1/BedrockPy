@@ -749,15 +749,158 @@ function endBulkMutation() {
 }
 
 const lazyBlockChunkPayloads = new Map();
+const lazyComposedLayerChunks = new Set();
 const dirtyBlockDataChunks = new Set();
 let logicalBlockCount = 0;
-let layers = [{ id: "layer-1", name: "레이어 1", visible: true, blocks: new Map() }];
+let layers = [{ id: "layer-1", name: "레이어 1", visible: true, blocks: null }];
 let activeLayerId = "layer-1";
 let nextLayerNumber = 2;
 let layerEditingEnabled = false;
 let layerCompositionWrite = false;
 let activeLayerUndoChanges = null;
 let activeUndoLayerId = null;
+
+class LayerBlockMap extends Map {
+  constructor(chunks = []) {
+    super();
+    this.lazyChunks = new Map();
+    this.lazyChunkCounts = new Map();
+    this.chunkPositions = new Map();
+    this.dirtyChunks = new Set();
+    this.logicalSize = 0;
+    for (const chunk of chunks || []) {
+      if (!chunk?.key || typeof chunk.data !== "string") continue;
+      const count = Math.max(0, Number(chunk.count) || 0);
+      this.lazyChunks.set(chunk.key, chunk.data);
+      this.lazyChunkCounts.set(chunk.key, count);
+      this.logicalSize += count;
+    }
+  }
+
+  get size() { return this.logicalSize; }
+
+  ensureChunk(chunkKey) {
+    const payload = this.lazyChunks.get(chunkKey);
+    if (payload == null) return;
+    this.lazyChunks.delete(chunkKey);
+    this.lazyChunkCounts.delete(chunkKey);
+    const [chunkX, chunkY, chunkZ] = chunkKey.split(",").map(Number);
+    const startX = chunkX * renderChunkSize;
+    const startY = chunkY * renderChunkSize;
+    const startZ = chunkZ * renderChunkSize;
+    const positions = new Set();
+    for (const [offset, type] of decodeChunkPayload(payload)) {
+      const position = key(
+        startX + (offset & 15),
+        startY + ((offset >> 4) & 15),
+        startZ + ((offset >> 8) & 15)
+      );
+      Map.prototype.set.call(this, position, type);
+      positions.add(position);
+    }
+    this.chunkPositions.set(chunkKey, positions);
+  }
+
+  ensureAll() {
+    for (const chunkKey of [...this.lazyChunks.keys()]) this.ensureChunk(chunkKey);
+  }
+
+  has(position) {
+    this.ensureChunk(blockPositionChunkKey(position));
+    return Map.prototype.has.call(this, position);
+  }
+
+  get(position) {
+    this.ensureChunk(blockPositionChunkKey(position));
+    return Map.prototype.get.call(this, position);
+  }
+
+  set(position, type) {
+    const chunkKey = blockPositionChunkKey(position);
+    this.ensureChunk(chunkKey);
+    const existed = Map.prototype.has.call(this, position);
+    Map.prototype.set.call(this, position, type);
+    if (!existed) this.logicalSize++;
+    if (!this.chunkPositions.has(chunkKey)) this.chunkPositions.set(chunkKey, new Set());
+    this.chunkPositions.get(chunkKey).add(position);
+    this.dirtyChunks.add(chunkKey);
+    return this;
+  }
+
+  delete(position) {
+    const chunkKey = blockPositionChunkKey(position);
+    this.ensureChunk(chunkKey);
+    const deleted = Map.prototype.delete.call(this, position);
+    if (deleted) {
+      this.logicalSize--;
+      this.chunkPositions.get(chunkKey)?.delete(position);
+      this.dirtyChunks.add(chunkKey);
+    }
+    return deleted;
+  }
+
+  entries() { this.ensureAll(); return Map.prototype.entries.call(this); }
+  keys() { this.ensureAll(); return Map.prototype.keys.call(this); }
+  values() { this.ensureAll(); return Map.prototype.values.call(this); }
+  [Symbol.iterator]() { return this.entries(); }
+  forEach(callback, thisArg) { this.ensureAll(); return Map.prototype.forEach.call(this, callback, thisArg); }
+
+  evictChunk(chunkKey) {
+    if (this.dirtyChunks.has(chunkKey) || this.lazyChunks.has(chunkKey)) return;
+    const positions = this.chunkPositions.get(chunkKey);
+    if (!positions) return;
+    const entries = [...positions]
+      .map(position => [position, Map.prototype.get.call(this, position)])
+      .filter(([, type]) => type != null);
+    this.lazyChunks.set(chunkKey, encodeChunkPayload(entries, chunkKey));
+    this.lazyChunkCounts.set(chunkKey, entries.length);
+    for (const position of positions) Map.prototype.delete.call(this, position);
+    this.chunkPositions.delete(chunkKey);
+  }
+
+  serializedChunks() {
+    const chunks = new Map();
+    for (const [chunkKey, data] of this.lazyChunks) {
+      chunks.set(chunkKey, { key: chunkKey, count: this.lazyChunkCounts.get(chunkKey) || 0, data });
+    }
+    const loadedByChunk = new Map();
+    for (const [position, type] of Map.prototype.entries.call(this)) {
+      const chunkKey = blockPositionChunkKey(position);
+      if (!loadedByChunk.has(chunkKey)) loadedByChunk.set(chunkKey, []);
+      loadedByChunk.get(chunkKey).push([position, type]);
+    }
+    for (const [chunkKey, entries] of loadedByChunk) {
+      chunks.set(chunkKey, {
+        key: chunkKey,
+        count: entries.length,
+        data: encodeChunkPayload(entries, chunkKey)
+      });
+    }
+    return [...chunks.values()];
+  }
+
+  chunkCounts() {
+    const counts = new Map(this.lazyChunkCounts);
+    for (const [chunkKey, positions] of this.chunkPositions) counts.set(chunkKey, positions.size);
+    return counts;
+  }
+}
+
+layers[0].blocks = new LayerBlockMap();
+
+function layerFromSerialized(layer, index = 0) {
+  const blocks = new LayerBlockMap(Array.isArray(layer.chunks) ? layer.chunks : []);
+  if (Array.isArray(layer.blocks)) {
+    for (const [position, type] of layer.blocks) blocks.set(position, type);
+    blocks.dirtyChunks.clear();
+  }
+  return {
+    id: String(layer.id || `layer-${index + 1}`),
+    name: String(layer.name || `레이어 ${index + 1}`).slice(0, 80),
+    visible: layer.visible !== false,
+    blocks
+  };
+}
 
 function activeLayer() {
   return layers.find(layer => layer.id === activeLayerId) || layers.at(-1);
@@ -812,28 +955,70 @@ function encodeChunkPayload(entries, chunkKey) {
   return btoa(JSON.stringify(compact));
 }
 
+function serializeBlockMapChunks(map) {
+  const grouped = new Map();
+  for (const [position, type] of Map.prototype.entries.call(map)) {
+    const chunkKey = blockPositionChunkKey(position);
+    if (!grouped.has(chunkKey)) grouped.set(chunkKey, []);
+    grouped.get(chunkKey).push([position, type]);
+  }
+  return [...grouped].map(([chunkKey, entries]) => ({
+    key: chunkKey,
+    count: entries.length,
+    data: encodeChunkPayload(entries, chunkKey)
+  }));
+}
+
 function ensureBlockChunkLoaded(chunkKey, map = blocks) {
   const payload = lazyBlockChunkPayloads.get(chunkKey);
-  if (payload == null) return;
+  const composeFromLayers = payload == null && lazyComposedLayerChunks.has(chunkKey);
+  if (payload == null && !composeFromLayers) return;
   lazyBlockChunkPayloads.delete(chunkKey);
+  lazyComposedLayerChunks.delete(chunkKey);
   const [chunkX, chunkY, chunkZ] = chunkKey.split(",").map(Number);
   const startX = chunkX * renderChunkSize;
   const startY = chunkY * renderChunkSize;
   const startZ = chunkZ * renderChunkSize;
   const positions = new Set();
-  for (const [offset, type] of decodeChunkPayload(payload)) {
-    const localX = offset & 15;
-    const localY = (offset >> 4) & 15;
-    const localZ = (offset >> 8) & 15;
-    const position = key(startX + localX, startY + localY, startZ + localZ);
-    Map.prototype.set.call(map, position, type);
-    positions.add(position);
+  if (composeFromLayers) {
+    const composed = new Map();
+    for (const layer of layers) {
+      if (!layer.visible) continue;
+      layer.blocks.ensureChunk(chunkKey);
+      for (const position of layer.blocks.chunkPositions.get(chunkKey) || []) {
+        const type = Map.prototype.get.call(layer.blocks, position);
+        if (type != null) composed.set(position, type);
+      }
+    }
+    const estimatedCount = blockChunkCounts.get(chunkKey) || 0;
+    logicalBlockCount += composed.size - estimatedCount;
+    blockChunkCounts.set(chunkKey, composed.size);
+    for (const [position, type] of composed) {
+      Map.prototype.set.call(map, position, type);
+      positions.add(position);
+      blockTypeCounts.set(type, (blockTypeCounts.get(type) || 0) + 1);
+      const [x, y, z] = position.split(",").map(Number);
+      const columnKey = `${x},${z}`;
+      if (!columnTopCache.has(columnKey) || y > columnTopCache.get(columnKey)) {
+        columnTopCache.set(columnKey, y);
+      }
+    }
+  } else {
+    for (const [offset, type] of decodeChunkPayload(payload)) {
+      const localX = offset & 15;
+      const localY = (offset >> 4) & 15;
+      const localZ = (offset >> 8) & 15;
+      const position = key(startX + localX, startY + localY, startZ + localZ);
+      Map.prototype.set.call(map, position, type);
+      positions.add(position);
+    }
   }
   blockChunkPositions.set(chunkKey, positions);
 }
 
 function ensureAllBlockChunksLoaded(map = blocks) {
   for (const chunkKey of [...lazyBlockChunkPayloads.keys()]) ensureBlockChunkLoaded(chunkKey, map);
+  for (const chunkKey of [...lazyComposedLayerChunks]) ensureBlockChunkLoaded(chunkKey, map);
 }
 
 function unloadCleanBlockChunk(chunkKey, map = blocks) {
@@ -850,7 +1035,10 @@ function unloadCleanBlockChunk(chunkKey, map = blocks) {
 
 function evictCleanBlockChunks(keepChunks = new Set(), map = blocks) {
   for (const chunkKey of [...blockChunkPositions.keys()]) {
-    if (!keepChunks.has(chunkKey)) unloadCleanBlockChunk(chunkKey, map);
+    if (!keepChunks.has(chunkKey)) {
+      unloadCleanBlockChunk(chunkKey, map);
+      for (const layer of layers) layer.blocks.evictChunk(chunkKey);
+    }
   }
 }
 
@@ -967,6 +1155,7 @@ class TrackedBlockMap extends Map {
 
 function createTrackedBlockMap(entries = []) {
   lazyBlockChunkPayloads.clear();
+  lazyComposedLayerChunks.clear();
   dirtyBlockDataChunks.clear();
   logicalBlockCount = 0;
   blockTypeCounts.clear();
@@ -985,6 +1174,7 @@ function createTrackedBlockMap(entries = []) {
 
 async function createTrackedBlockMapFromBlocks(rawBlocks, revision, showProgress) {
   lazyBlockChunkPayloads.clear();
+  lazyComposedLayerChunks.clear();
   dirtyBlockDataChunks.clear();
   logicalBlockCount = 0;
   blockTypeCounts.clear();
@@ -1039,6 +1229,7 @@ async function createTrackedBlockMapFromBlocks(rawBlocks, revision, showProgress
 
 function createLazyTrackedBlockMap(data) {
   lazyBlockChunkPayloads.clear();
+  lazyComposedLayerChunks.clear();
   dirtyBlockDataChunks.clear();
   logicalBlockCount = 0;
   blockTypeCounts.clear();
@@ -1060,6 +1251,33 @@ function createLazyTrackedBlockMap(data) {
   }
   blockMutationRevision++;
   return map;
+}
+
+function createLazyComposedLayerMap() {
+  lazyBlockChunkPayloads.clear();
+  lazyComposedLayerChunks.clear();
+  dirtyBlockDataChunks.clear();
+  logicalBlockCount = 0;
+  blockTypeCounts.clear();
+  blockChunkCounts.clear();
+  blockChunkPositions.clear();
+  columnTopCache.clear();
+  dirtyRenderChunks.clear();
+  pendingRenderChunks.clear();
+  const chunkEstimates = new Map();
+  for (const layer of layers) {
+    if (!layer.visible) continue;
+    for (const [chunkKey, count] of layer.blocks.chunkCounts()) {
+      lazyComposedLayerChunks.add(chunkKey);
+      chunkEstimates.set(chunkKey, Math.max(chunkEstimates.get(chunkKey) || 0, count));
+    }
+  }
+  for (const [chunkKey, count] of chunkEstimates) {
+    blockChunkCounts.set(chunkKey, count);
+    logicalBlockCount += count;
+  }
+  blockMutationRevision++;
+  return new TrackedBlockMap();
 }
 
 let blocks = createTrackedBlockMap();
@@ -1624,11 +1842,12 @@ function applyUndoTransaction(transaction, direction) {
     return;
   }
   if (transaction.kind === "layer-delete") {
+    const compositionBefore = captureLayerCompositionState();
     if (direction === "undo") {
       if (!layers.some(layer => layer.id === transaction.layer.id))
         layers.splice(Math.min(transaction.index, layers.length), 0, {
           ...transaction.layer,
-          blocks: new Map(transaction.layer.blocks)
+          blocks: transaction.layer.blocks
         });
       activeLayerId = transaction.activeBefore;
     } else {
@@ -1638,10 +1857,11 @@ function applyUndoTransaction(transaction, direction) {
         ? transaction.activeAfter
         : layers.at(-1).id;
     }
-    rebuildComposedLayers(true, false);
+    rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
     return;
   }
   if (transaction.kind === "layer-add") {
+    const compositionBefore = captureLayerCompositionState();
     if (direction === "undo") {
       const index = layers.findIndex(layer => layer.id === transaction.layer.id);
       if (index >= 0 && layers.length > 1) layers.splice(index, 1);
@@ -1652,12 +1872,12 @@ function applyUndoTransaction(transaction, direction) {
       if (!layers.some(layer => layer.id === transaction.layer.id)) {
         layers.splice(Math.min(transaction.index, layers.length), 0, {
           ...transaction.layer,
-          blocks: new Map(transaction.layer.blocks)
+          blocks: transaction.layer.blocks
         });
       }
       activeLayerId = transaction.layer.id;
     }
-    rebuildComposedLayers(true, false);
+    rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
     return;
   }
   if (transaction.kind === "layer-rename") {
@@ -1669,18 +1889,20 @@ function applyUndoTransaction(transaction, direction) {
     return;
   }
   if (transaction.kind === "layer-visibility") {
+    const compositionBefore = captureLayerCompositionState();
     const layer = layers.find(item => item.id === transaction.layerId);
     if (layer) layer.visible = direction === "undo" ? transaction.before : transaction.after;
     activeLayerId = transaction.layerId;
-    rebuildComposedLayers(true, false);
+    rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
     return;
   }
   if (transaction.kind === "layer-reorder") {
+    const compositionBefore = captureLayerCompositionState();
     const order = direction === "undo" ? transaction.before : transaction.after;
     const byId = new Map(layers.map(layer => [layer.id, layer]));
     layers = order.map(id => byId.get(id)).filter(Boolean);
     activeLayerId = transaction.layerId;
-    rebuildComposedLayers(true, false);
+    rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
     return;
   }
   beginBulkMutation();
@@ -1747,10 +1969,116 @@ function composeVisibleLayerEntries() {
   return composed;
 }
 
+function captureLayerCompositionState(sourceLayers = layers) {
+  return sourceLayers.map(layer => ({ layer, visible: layer.visible }));
+}
+
+function layerStateChunkKeys(state) {
+  const keys = new Set();
+  for (const { layer } of state) {
+    for (const chunkKey of layer.blocks.chunkCounts().keys()) keys.add(chunkKey);
+  }
+  return keys;
+}
+
+function affectedLayerChunkKeys(beforeState, afterState) {
+  const beforeSignature = new Map(beforeState.map(({ layer, visible }, index) =>
+    [layer.id, `${index}:${visible}`]
+  ));
+  const afterSignature = new Map(afterState.map(({ layer, visible }, index) =>
+    [layer.id, `${index}:${visible}`]
+  ));
+  const changedLayerIds = new Set();
+  for (const id of new Set([...beforeSignature.keys(), ...afterSignature.keys()])) {
+    if (beforeSignature.get(id) !== afterSignature.get(id)) changedLayerIds.add(id);
+  }
+  const keys = new Set();
+  for (const { layer } of [...beforeState, ...afterState]) {
+    if (!changedLayerIds.has(layer.id)) continue;
+    for (const chunkKey of layer.blocks.chunkCounts().keys()) keys.add(chunkKey);
+  }
+  return keys;
+}
+
+function composeLayerChunkFromState(chunkKey, state) {
+  const composed = new Map();
+  for (const { layer, visible } of state) {
+    if (!visible) continue;
+    layer.blocks.ensureChunk(chunkKey);
+    for (const position of layer.blocks.chunkPositions.get(chunkKey) || []) {
+      const type = Map.prototype.get.call(layer.blocks, position);
+      if (type != null) composed.set(position, type);
+    }
+  }
+  return composed;
+}
+
+function equalComposedChunks(before, after) {
+  if (before.size !== after.size) return false;
+  for (const [position, type] of before) if (after.get(position) !== type) return false;
+  return true;
+}
+
+function replaceComposedChunk(chunkKey, before, after) {
+  lazyBlockChunkPayloads.delete(chunkKey);
+  lazyComposedLayerChunks.delete(chunkKey);
+  const loadedPositions = blockChunkPositions.get(chunkKey);
+  for (const position of loadedPositions || []) Map.prototype.delete.call(blocks, position);
+  for (const [position, type] of after) Map.prototype.set.call(blocks, position, type);
+  for (const type of before.values()) {
+    const count = (blockTypeCounts.get(type) || 0) - 1;
+    if (count > 0) blockTypeCounts.set(type, count);
+    else blockTypeCounts.delete(type);
+  }
+  for (const type of after.values()) blockTypeCounts.set(type, (blockTypeCounts.get(type) || 0) + 1);
+  logicalBlockCount += after.size - (blockChunkCounts.get(chunkKey) || before.size);
+  if (after.size) {
+    blockChunkCounts.set(chunkKey, after.size);
+    blockChunkPositions.set(chunkKey, new Set(after.keys()));
+  } else {
+    blockChunkCounts.delete(chunkKey);
+    blockChunkPositions.delete(chunkKey);
+  }
+  const [chunkX, chunkY, chunkZ] = chunkKey.split(",").map(Number);
+  const startX = chunkX * renderChunkSize;
+  const startZ = chunkZ * renderChunkSize;
+  for (let x = startX; x < startX + renderChunkSize; x++) {
+    for (let z = startZ; z < startZ + renderChunkSize; z++) columnTopCache.delete(`${x},${z}`);
+  }
+  dirtyRenderChunks.add(chunkKey);
+  dirtyRenderChunks.add(`${chunkX - 1},${chunkY},${chunkZ}`);
+  dirtyRenderChunks.add(`${chunkX + 1},${chunkY},${chunkZ}`);
+  dirtyRenderChunks.add(`${chunkX},${chunkY - 1},${chunkZ}`);
+  dirtyRenderChunks.add(`${chunkX},${chunkY + 1},${chunkZ}`);
+  dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ - 1}`);
+  dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ + 1}`);
+}
+
+function rebuildChangedLayerChunks(beforeState, afterState, markDirty = true) {
+  const affected = affectedLayerChunkKeys(beforeState, afterState);
+  let changed = 0;
+  for (const chunkKey of affected) {
+    const before = composeLayerChunkFromState(chunkKey, beforeState);
+    const after = composeLayerChunkFromState(chunkKey, afterState);
+    if (equalComposedChunks(before, after)) continue;
+    replaceComposedChunk(chunkKey, before, after);
+    changed++;
+  }
+  activeUndoChanges = null;
+  activeLayerUndoChanges = null;
+  activeUndoLayerId = null;
+  renderLayerList();
+  if (markDirty) markCurrentProjectFileDirty();
+  if (changed) {
+    blockMutationRevision++;
+    scheduleEditRebuild();
+  }
+  return changed;
+}
+
 function rebuildComposedLayers(markDirty = true, resetHistory = true) {
-  const composed = composeVisibleLayerEntries();
   layerEditingEnabled = false;
-  blocks = createTrackedBlockMap(composed);
+  blocks = createLazyComposedLayerMap();
   layerEditingEnabled = true;
   forceFullRebuildPending = true;
   if (resetHistory) {
@@ -1784,6 +2112,7 @@ function renderLayerList() {
     visibility.title = layer.visible ? "레이어 숨기기" : "레이어 보이기";
     visibility.addEventListener("click", event => {
       event.stopPropagation();
+      const compositionBefore = captureLayerCompositionState();
       const before = layer.visible;
       layer.visible = !layer.visible;
       history.push({
@@ -1795,7 +2124,7 @@ function renderLayerList() {
       });
       trimUndoHistory();
       future = [];
-      rebuildComposedLayers(true, false);
+      rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
     });
     const name = document.createElement("span");
     name.className = "layer-name";
@@ -1842,6 +2171,7 @@ function renderLayerList() {
 }
 
 function addLayer() {
+  const compositionBefore = captureLayerCompositionState();
   const usedNumbers = new Set(layers.map(layer =>
     /^레이어\s+(\d+)$/.exec(layer.name)?.[1]
   ).filter(Boolean).map(Number));
@@ -1851,7 +2181,7 @@ function addLayer() {
     id: `layer-${Date.now()}-${layerNumber}`,
     name: `레이어 ${layerNumber}`,
     visible: true,
-    blocks: new Map()
+    blocks: new LayerBlockMap()
   };
   nextLayerNumber = Math.max(nextLayerNumber, layerNumber + 1);
   const activeBefore = activeLayerId;
@@ -1860,14 +2190,14 @@ function addLayer() {
   activeLayerId = layer.id;
   history.push({
     kind: "layer-add",
-    layer: { ...layer, blocks: new Map() },
+    layer,
     index,
     activeBefore,
     changeCount: 1
   });
   trimUndoHistory();
   future = [];
-  rebuildComposedLayers(true, false);
+  rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
 }
 
 function renameActiveLayer() {
@@ -1933,14 +2263,15 @@ function performLayerDelete(layerId) {
   const layer = layers.find(item => item.id === layerId);
   if (!layer) return;
   const index = layers.indexOf(layer);
+  const compositionBefore = captureLayerCompositionState();
   const activeBefore = activeLayerId;
   layers.splice(index, 1);
   activeLayerId = layers[Math.min(index, layers.length - 1)].id;
   const activeAfter = activeLayerId;
-  rebuildComposedLayers(true, false);
+  rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
   history.push({
     kind: "layer-delete",
-    layer: { ...layer, blocks: new Map(layer.blocks) },
+    layer,
     index,
     activeBefore,
     activeAfter,
@@ -1955,6 +2286,7 @@ function reorderLayerByDrop(sourceId, targetId, before) {
     renderLayerList();
     return;
   }
+  const compositionBefore = captureLayerCompositionState();
   const orderBefore = layers.map(layer => layer.id);
   const displayed = [...layers].reverse();
   const sourceIndex = displayed.findIndex(layer => layer.id === sourceId);
@@ -1977,7 +2309,7 @@ function reorderLayerByDrop(sourceId, targetId, before) {
     trimUndoHistory();
     future = [];
   }
-  rebuildComposedLayers(true, false);
+  rebuildChangedLayerChunks(compositionBefore, captureLayerCompositionState());
 }
 
 let pendingGroupedRebuild = false;
@@ -5896,7 +6228,8 @@ function serialize() {
       id: layer.id,
       name: layer.name,
       visible: layer.visible,
-      blocks: [...layer.blocks]
+      count: layer.blocks.size,
+      chunks: layer.blocks.serializedChunks()
     })),
     activeLayerId,
     blockTypes: Object.fromEntries(blockTypeCounts),
@@ -6025,10 +6358,12 @@ function applyWorkspaceSize(nextSize) {
   const normalized = normalizedSize(nextSize);
   workspaceSize = normalized;
   for (const layer of layers) {
-    layer.blocks = new Map([...layer.blocks].filter(([position]) => {
+    const previousBlocks = layer.blocks;
+    layer.blocks = new LayerBlockMap();
+    for (const [position, type] of [...previousBlocks].filter(([position]) => {
       const [x, y, z] = position.split(",").map(Number);
       return valid({ x, y, z });
-    }));
+    })) layer.blocks.set(position, type);
   }
   selectionA = selectionA && valid(selectionA) ? selectionA : null;
   selectionB = selectionB && valid(selectionB) ? selectionB : null;
@@ -6048,7 +6383,11 @@ async function loadStructure(data, fileName) {
   const revision = ++structureLoadRevision;
   const rawBlocks = data.blocks || [];
   const layerBlockCount = Array.isArray(data.layers)
-    ? data.layers.reduce((sum, layer) => sum + (Array.isArray(layer.blocks) ? layer.blocks.length : 0), 0)
+    ? data.layers.reduce((sum, layer) => sum + (
+        Number(layer.count) ||
+        (Array.isArray(layer.chunks) ? layer.chunks.reduce((chunkSum, chunk) => chunkSum + (Number(chunk.count) || 0), 0) : 0) ||
+        (Array.isArray(layer.blocks) ? layer.blocks.length : 0)
+      ), 0)
     : 0;
   const totalBlocks = layerBlockCount || rawBlocks.length;
   const showProgress = totalBlocks >= 5000;
@@ -6064,12 +6403,7 @@ async function loadStructure(data, fileName) {
     defaultFunctionNameForFile(fileName)
   );
   const serializedLayers = Array.isArray(data.layers) && data.layers.length
-    ? data.layers.map((layer, index) => ({
-        id: String(layer.id || `layer-${index + 1}`),
-        name: String(layer.name || `레이어 ${index + 1}`).slice(0, 80),
-        visible: layer.visible !== false,
-        blocks: new Map(Array.isArray(layer.blocks) ? layer.blocks : [])
-      }))
+    ? data.layers.map((layer, index) => layerFromSerialized(layer, index))
     : null;
   layerEditingEnabled = false;
   let loadedBlocks;
@@ -6079,7 +6413,7 @@ async function loadStructure(data, fileName) {
       ? data.activeLayerId
       : layers.at(-1).id;
     nextLayerNumber = layers.length + 1;
-    loadedBlocks = createTrackedBlockMap(composeVisibleLayerEntries());
+    loadedBlocks = createLazyComposedLayerMap();
   } else {
     // 외부 Minecraft .mcstructure의 blocks 배열만 레이어 1로 가져온다.
     loadedBlocks = await createTrackedBlockMapFromBlocks(rawBlocks, revision, showProgress);
@@ -6089,7 +6423,9 @@ async function loadStructure(data, fileName) {
         id: "layer-1",
         name: "레이어 1",
         visible: true,
-        blocks: new Map(Map.prototype.entries.call(loadedBlocks))
+        blocks: layerFromSerialized({
+          chunks: serializeBlockMapChunks(loadedBlocks)
+        }).blocks
       }];
       activeLayerId = "layer-1";
       nextLayerNumber = 2;
