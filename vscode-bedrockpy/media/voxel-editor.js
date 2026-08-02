@@ -446,7 +446,9 @@ function updateAdaptiveGrid(force = false) {
   let innerRange = 0;
   for (let level = 0; level < 7 && innerRange < maximumRange; level++) {
     const step = gridStep * (4 ** level);
-    const outerRange = Math.min(maximumRange, gridStep * 128 * (4 ** level));
+    // 카메라 주변의 가장 촘촘한 1×1 영역은 조금 넉넉하게 유지하고,
+    // 바깥쪽만 4×4, 16×16 단계로 전환한다.
+    const outerRange = Math.min(maximumRange, gridStep * 160 * (4 ** level));
     const outerStartX = THREE.MathUtils.clamp(centerX - outerRange, 0, workspaceSize.x);
     const outerEndX = THREE.MathUtils.clamp(centerX + outerRange, 0, workspaceSize.x);
     const outerStartZ = THREE.MathUtils.clamp(centerZ - outerRange, 0, workspaceSize.z);
@@ -3290,6 +3292,9 @@ document.getElementById("choose-voxel-image")?.addEventListener("click", () => {
 document.getElementById("choose-voxel-model")?.addEventListener("click", () => {
   vscode.postMessage({ type: "chooseVoxelModel" });
 });
+document.getElementById("choose-block-text-font")?.addEventListener("click", () => {
+  vscode.postMessage({ type: "chooseBlockTextFont" });
+});
 for (const [currentId, otherId] of [
   ["connected-selection", "connected-any-selection"],
   ["connected-any-selection", "connected-selection"],
@@ -4130,6 +4135,141 @@ function noise2d(x, z, seed) {
 }
 
 let blockTextRasterCache = { signature: "", offsets: [] };
+const blockTextFonts = {
+  "bold-sans": {
+    label: "굵은 고딕",
+    weight: 900,
+    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'
+  },
+  rounded: {
+    label: "둥근 고딕",
+    weight: 800,
+    family: 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'
+  },
+  serif: {
+    label: "명조",
+    weight: 700,
+    family: 'Georgia, "Times New Roman", "AppleMyungjo", "Batang", serif'
+  },
+  mono: {
+    label: "모노스페이스",
+    weight: 700,
+    family: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, "Nanum Gothic Coding", monospace'
+  },
+  pixel: {
+    label: "픽셀",
+    weight: 900,
+    family: 'Impact, Haettenschweiler, "Arial Narrow Bold", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'
+  },
+  handwriting: {
+    label: "손글씨",
+    weight: 700,
+    family: '"Comic Sans MS", "Bradley Hand", "Apple Chancery", "Nanum Pen Script", cursive'
+  }
+};
+
+function selectedBlockTextFont() {
+  const id = document.getElementById("block-text-font")?.value || "bold-sans";
+  return { id, ...(blockTextFonts[id] || blockTextFonts["bold-sans"]) };
+}
+
+function blockTextCanvasFont(size) {
+  const font = selectedBlockTextFont();
+  return `${font.weight} ${size}px ${font.family}`;
+}
+
+function updateBlockTextPreview() {
+  const preview = document.getElementById("block-text-preview");
+  if (!preview) return;
+  const text = String(document.getElementById("block-text")?.value || "");
+  const font = selectedBlockTextFont();
+  preview.textContent = text || "텍스트 미리보기";
+  preview.style.fontFamily = font.family;
+  preview.style.fontWeight = String(font.weight);
+}
+
+function setBlockTextFont(fontId) {
+  const font = blockTextFonts[fontId] || blockTextFonts["bold-sans"];
+  const input = document.getElementById("block-text-font");
+  const trigger = document.getElementById("block-text-font-trigger");
+  const menu = document.getElementById("block-text-font-menu");
+  if (input) input.value = fontId in blockTextFonts ? fontId : "bold-sans";
+  if (trigger) {
+    trigger.className = `font-picker-trigger font-${input?.value || "bold-sans"}`;
+    trigger.innerHTML = `${font.label} <span>⌄</span>`;
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.style.fontFamily = font.family;
+    trigger.style.fontWeight = String(font.weight);
+  }
+  menu?.querySelectorAll("[data-text-font]").forEach(option => {
+    const active = option.dataset.textFont === input?.value;
+    option.classList.toggle("active", active);
+    option.setAttribute("aria-selected", String(active));
+  });
+  if (menu) menu.hidden = true;
+  blockTextRasterCache.signature = "";
+  specialPlacementSourceCache = { signature: "", items: [] };
+  ghostSignature = "";
+  updateBlockTextPreview();
+  refreshHover();
+}
+
+document.getElementById("block-text-font-trigger")?.addEventListener("click", event => {
+  event.stopPropagation();
+  const menu = document.getElementById("block-text-font-menu");
+  const trigger = event.currentTarget;
+  menu.hidden = !menu.hidden;
+  trigger.setAttribute("aria-expanded", String(!menu.hidden));
+});
+document.getElementById("block-text-font-menu")?.addEventListener("click", event => {
+  const option = event.target.closest("[data-text-font]");
+  if (!option) return;
+  event.stopPropagation();
+  setBlockTextFont(option.dataset.textFont);
+});
+document.addEventListener("click", event => {
+  if (event.target.closest?.("#block-text-font-picker")) return;
+  const menu = document.getElementById("block-text-font-menu");
+  const trigger = document.getElementById("block-text-font-trigger");
+  if (menu) menu.hidden = true;
+  trigger?.setAttribute("aria-expanded", "false");
+});
+
+async function loadCustomBlockTextFont(message) {
+  const status = document.getElementById("block-text-font-status");
+  if (status) status.textContent = `${message.fileName} 읽는 중…`;
+  try {
+    const bytes = decodeBase64Bytes(message.data);
+    const familyName = `BedrockPyCustomFont${Date.now()}`;
+    const fontBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const face = new FontFace(familyName, fontBytes);
+    await face.load();
+    document.fonts.add(face);
+    blockTextFonts.custom = {
+      label: message.fileName.replace(/\.(?:ttf|otf|woff2?)$/i, ""),
+      weight: 400,
+      family: `"${familyName}"`
+    };
+    const menu = document.getElementById("block-text-font-menu");
+    let option = menu?.querySelector('[data-text-font="custom"]');
+    if (!option && menu) {
+      option = document.createElement("button");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.dataset.textFont = "custom";
+      menu.appendChild(option);
+    }
+    if (option) {
+      option.textContent = blockTextFonts.custom.label;
+      option.style.fontFamily = blockTextFonts.custom.family;
+      option.style.fontWeight = "400";
+    }
+    if (status) status.textContent = `${message.fileName} · 사용자 폰트 적용됨`;
+    setBlockTextFont("custom");
+  } catch (error) {
+    if (status) status.textContent = `폰트 불러오기 오류: ${error.message}`;
+  }
+}
 let voxelImageAsset = null;
 let voxelImageRasterCache = { signature: "", offsets: [] };
 let voxelModelAsset = null;
@@ -4327,17 +4467,18 @@ function collectBlockTextCells(center, respectMask = true) {
   if (!text) return [];
   const fontSize = shapeNumber("block-text-size", 12, 5, 64);
   const depth = shapeNumber("block-text-depth", 1, 1, 16);
-  const signature = `${text}\u0000${fontSize}\u0000${depth}`;
+  const selectedFont = selectedBlockTextFont();
+  const signature = `${text}\u0000${selectedFont.id}\u0000${fontSize}\u0000${depth}`;
   if (blockTextRasterCache.signature !== signature) {
     const textCanvas = document.createElement("canvas");
     const context = textCanvas.getContext("2d", { willReadFrequently: true });
-    context.font = `900 ${fontSize}px -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif`;
+    context.font = blockTextCanvasFont(fontSize);
     const metrics = context.measureText(text);
     const ascent = Math.ceil(metrics.actualBoundingBoxAscent || fontSize);
     const descent = Math.ceil(metrics.actualBoundingBoxDescent || fontSize * 0.25);
     textCanvas.width = Math.max(1, Math.ceil(metrics.width) + 4);
     textCanvas.height = Math.max(1, ascent + descent + 4);
-    context.font = `900 ${fontSize}px -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif`;
+    context.font = blockTextCanvasFont(fontSize);
     context.fillStyle = "#fff";
     context.textBaseline = "alphabetic";
     context.fillText(text, 2, 2 + ascent);
@@ -4476,6 +4617,7 @@ function specialGeneratorItems(generator) {
   const signature = [
     generator, activeBlock, voxelImageAsset?.id || "", voxelModelAsset?.id || "",
     document.getElementById("block-text")?.value || "",
+    document.getElementById("block-text-font")?.value || "bold-sans",
     document.getElementById("block-text-size")?.value || "",
     document.getElementById("block-text-depth")?.value || "",
     document.getElementById("image-block-width")?.value || "",
@@ -5561,7 +5703,7 @@ for (const id of [
   "brush-size", "brush-shape", "shape-radius", "shape-height", "shape-hollow",
   "mountain-roughness", "mountain-seed", "line-thickness", "curve-thickness",
   "limit-to-selection", "paste-air",
-  "place-air-only", "place-solid-only", "block-text", "block-text-size", "block-text-depth",
+  "place-air-only", "place-solid-only", "block-text", "block-text-font", "block-text-size", "block-text-depth",
   "image-block-width", "image-block-depth", "model-block-size", "model-solid",
   "sculpt-mode", "sculpt-strength", "selection-sculpt-mode", "selection-sculpt-strength"
 ]) {
@@ -5578,9 +5720,12 @@ for (const id of [
         document.getElementById("selection-sculpt-strength").value;
     }
     ghostSignature = "";
+    if (id === "block-text" || id === "block-text-font") updateBlockTextPreview();
     refreshHover();
   });
 }
+updateBlockTextPreview();
+setBlockTextFont(document.getElementById("block-text-font")?.value || "bold-sans");
 
 function relative(value) {
   return value === 0 ? "~" : `~${value}`;
@@ -6028,6 +6173,11 @@ window.addEventListener("blur", commitPendingPlacement);
 
 window.addEventListener("message", event => {
   const message = event.data;
+  if (message.type === "blockTextFontLoaded") loadCustomBlockTextFont(message);
+  if (message.type === "blockTextFontLoadFailed") {
+    const status = document.getElementById("block-text-font-status");
+    if (status) status.textContent = `폰트 불러오기 오류: ${message.error}`;
+  }
   if (message.type === "voxelImageLoaded") {
     const status = document.getElementById("voxel-image-status");
     if (status) status.textContent = `${message.fileName} 읽는 중…`;

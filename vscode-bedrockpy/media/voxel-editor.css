@@ -141,6 +141,31 @@ input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-sele
   overflow-wrap: anywhere;
 }
 .text-tool-options { margin-top: 9px; padding-top: 2px; }
+.block-text-preview {
+  min-height: 52px; margin-top: 7px; padding: 8px 9px; display: flex; align-items: center;
+  overflow: hidden; overflow-wrap: anywhere; border: 1px solid #33483e; border-radius: 4px;
+  color: #e8f5ec; background:
+    linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.025) 75%),
+    #111914;
+  background-size: 12px 12px; font-size: 24px; line-height: 1.15;
+}
+.font-picker { position: relative; }
+.font-picker-trigger {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; text-align: left;
+}
+.font-picker-menu {
+  position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 3px); padding: 4px;
+  border: 1px solid #40574b; border-radius: 5px; background: #121a15;
+  box-shadow: 0 8px 22px rgba(0,0,0,.48);
+}
+.font-picker-menu button { width: 100%; margin: 1px 0; text-align: left; font-size: 15px; }
+.font-picker-menu button.active { color: var(--green); border-color: #54725f; background: #24341f; }
+.font-bold-sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif !important; font-weight: 900; }
+.font-rounded { font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif !important; font-weight: 800; }
+.font-serif { font-family: Georgia, "Times New Roman", "AppleMyungjo", Batang, serif !important; font-weight: 700; }
+.font-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Nanum Gothic Coding", monospace !important; font-weight: 700; }
+.font-pixel { font-family: Impact, Haettenschweiler, "Arial Narrow Bold", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif !important; font-weight: 900; letter-spacing: .035em; }
+.font-handwriting { font-family: "Comic Sans MS", "Bradley Hand", "Apple Chancery", "Nanum Pen Script", cursive !important; font-weight: 700; }
 .tool-grid button.active, .shape-grid button.active {
   border-color: var(--green); color: var(--green); background: #24341f;
   box-shadow: inset 3px 0 var(--green);

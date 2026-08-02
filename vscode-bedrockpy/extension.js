@@ -330,6 +330,25 @@ function structureEditorHtml(webview, context) {
               <label for="block-text">내용</label>
               <input id="block-text" value="BEDROCK" maxlength="64" spellcheck="false">
             </div>
+            <div class="field" style="margin-top:7px">
+              <label id="block-text-font-label">폰트</label>
+              <input id="block-text-font" type="hidden" value="bold-sans">
+              <div id="block-text-font-picker" class="font-picker">
+                <button id="block-text-font-trigger" class="font-picker-trigger font-bold-sans"
+                  type="button" aria-haspopup="listbox" aria-expanded="false">굵은 고딕 <span>⌄</span></button>
+                <div id="block-text-font-menu" class="font-picker-menu" role="listbox" aria-labelledby="block-text-font-label" hidden>
+                  <button type="button" role="option" data-text-font="bold-sans" class="font-bold-sans active">굵은 고딕</button>
+                  <button type="button" role="option" data-text-font="rounded" class="font-rounded">둥근 고딕</button>
+                  <button type="button" role="option" data-text-font="serif" class="font-serif">명조</button>
+                  <button type="button" role="option" data-text-font="mono" class="font-mono">모노스페이스</button>
+                  <button type="button" role="option" data-text-font="pixel" class="font-pixel">픽셀</button>
+                  <button type="button" role="option" data-text-font="handwriting" class="font-handwriting">손글씨</button>
+                </div>
+              </div>
+              <button id="choose-block-text-font" type="button" style="width:100%;margin-top:5px">폰트 파일 선택…</button>
+              <div id="block-text-font-status" class="import-status">TTF, OTF, WOFF, WOFF2</div>
+            </div>
+            <div id="block-text-preview" class="block-text-preview" aria-label="폰트 미리보기">BEDROCK</div>
             <div class="row" style="margin-top:7px">
               <div class="field">
                 <label for="block-text-size">글자 크기</label>
@@ -1252,6 +1271,30 @@ async function openStructureEditor(context, initialUri) {
         mime,
         data: Buffer.from(bytes).toString('base64')
       });
+      return;
+    }
+    if (message.type === 'chooseBlockTextFont') {
+      const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { '폰트': ['ttf', 'otf', 'woff', 'woff2'] },
+        openLabel: '텍스트 블록 폰트 불러오기'
+      });
+      if (!selected?.[0]) return;
+      try {
+        const bytes = await vscode.workspace.fs.readFile(selected[0]);
+        structurePanel.webview.postMessage({
+          type: 'blockTextFontLoaded',
+          fileName: path.basename(selected[0].fsPath),
+          data: Buffer.from(bytes).toString('base64')
+        });
+      } catch (error) {
+        structurePanel.webview.postMessage({
+          type: 'blockTextFontLoadFailed',
+          error: error.message
+        });
+      }
       return;
     }
     if (message.type === 'chooseVoxelModel') {

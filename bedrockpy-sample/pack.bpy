@@ -1,0 +1,10 @@
+pack:
+    name = "BedrockPy Sample"
+    description = "BedrockPy 기본 샘플 프로젝트"
+    namespace = "sample"
+    version = auto
+    min_engine_version = [1, 21, 0]
+    output = "build/BedrockPySampleBP"
+    mcpack = "build/BedrockPySample.mcpack"
+    mcaddon = "build/BedrockPySample.mcaddon"
+    max_lines = 10000
