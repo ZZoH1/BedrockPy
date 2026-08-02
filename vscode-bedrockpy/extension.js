@@ -698,6 +698,7 @@ function structureEditorHtml(webview, context) {
             <kbd>휠</kbd> 확대·축소<br>
             <kbd>WASD</kbd> 시점 이동<br>
             <kbd>Space/Shift</kbd> 위/아래<br>
+            <kbd>C+브러시 드래그</kbd> 움직인 방향의 축으로 고정<br>
             <kbd>⌘/Ctrl Z</kbd> 실행 취소
           </p>
         </section>

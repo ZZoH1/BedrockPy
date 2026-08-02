@@ -1028,6 +1028,7 @@ let pointerDown = null;
 let hoveredCell = null;
 let lastPointer = null;
 let clipboardBlocks = [];
+let clipboardSourceOrigin = null;
 let placementScale = 1;
 let placementStretch = { x: 1, y: 1, z: 1 };
 let placementRotation = { x: 0, y: 0, z: 0 };
@@ -1139,7 +1140,8 @@ updateCamera();
 const pressedKeys = new Set();
 const movementCodeNames = {
   KeyW: "w", KeyA: "a", KeyS: "s", KeyD: "d",
-  Space: "space", ShiftLeft: "shift", ShiftRight: "shift"
+  Space: "space", ShiftLeft: "shift", ShiftRight: "shift",
+  KeyC: "axisLock"
 };
 window.addEventListener("keydown", event => {
   if (!playMode && (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
@@ -1148,11 +1150,15 @@ window.addEventListener("keydown", event => {
   if (keyName) {
     pressedKeys.add(keyName);
     event.preventDefault();
+    if (keyName === "axisLock" && (tool === "paste" || tool === "moveSelection")) refreshHover();
   }
 });
 window.addEventListener("keyup", event => {
   const keyName = movementCodeNames[event.code];
-  if (keyName) pressedKeys.delete(keyName);
+  if (keyName) {
+    pressedKeys.delete(keyName);
+    if (keyName === "axisLock" && (tool === "paste" || tool === "moveSelection")) refreshHover();
+  }
 });
 window.addEventListener("blur", () => pressedKeys.clear());
 
@@ -2126,9 +2132,11 @@ function refreshHover() {
   updateCursorCoordinate(pointedCell && valid(pointedCell) ? pointedCell : null);
   hover.visible = Boolean(hoveredCell);
   if (hoveredCell) hover.position.set(hoveredCell.x + 0.5, hoveredCell.y + 0.5, hoveredCell.z + 0.5);
-  const previewCell = pendingPlacement?.tool === tool && pendingPlacement.locked
-    ? pendingPlacement.origin
-    : hoveredCell;
+  const previewCell = effectiveTransformPlacementOrigin(
+    pendingPlacement?.tool === tool && pendingPlacement.locked
+      ? pendingPlacement.origin
+      : hoveredCell
+  );
   updateGhostPreview(previewCell);
 }
 
@@ -2211,6 +2219,65 @@ function interpolatedBrushCenters(from, to, limit = 96) {
     });
   }
   return result;
+}
+
+function constrainBrushCellToAutomaticAxis(pointerState, cell, screenPoint) {
+  if (!pressedKeys.has("axisLock")) {
+    pointerState.axisConstraintAxis = null;
+    pointerState.axisConstraintOrigin = null;
+    pointerState.axisConstraintScreenOrigin = null;
+    return cell;
+  }
+  if (!pointerState.axisConstraintOrigin) {
+    pointerState.axisConstraintOrigin = cloneCell(
+      pointerState.currentCell || pointerState.lastCell || pointerState.origin || cell
+    );
+    pointerState.axisConstraintScreenOrigin = {
+      x: pointerState.lastScreenX ?? screenPoint.clientX,
+      y: pointerState.lastScreenY ?? screenPoint.clientY
+    };
+  }
+  const origin = pointerState.axisConstraintOrigin;
+  const screenOrigin = pointerState.axisConstraintScreenOrigin;
+  const rect = canvas.getBoundingClientRect();
+  const worldOrigin = new THREE.Vector3(origin.x + 0.5, origin.y + 0.5, origin.z + 0.5);
+  const projectedOrigin = worldOrigin.clone().project(camera);
+  const screenVectors = {};
+  for (const axis of ["x", "y", "z"]) {
+    const endpoint = worldOrigin.clone();
+    endpoint[axis] += 1;
+    const projectedEndpoint = endpoint.project(camera);
+    screenVectors[axis] = new THREE.Vector2(
+      (projectedEndpoint.x - projectedOrigin.x) * rect.width * 0.5,
+      -(projectedEndpoint.y - projectedOrigin.y) * rect.height * 0.5
+    );
+  }
+  const mouseDelta = new THREE.Vector2(
+    screenPoint.clientX - screenOrigin.x,
+    screenPoint.clientY - screenOrigin.y
+  );
+  if (!pointerState.axisConstraintAxis) {
+    if (mouseDelta.lengthSq() < 4) return cloneCell(origin);
+    const mouseDirection = mouseDelta.clone().normalize();
+    const scores = Object.fromEntries(["x", "y", "z"].map(axis => [
+      axis,
+      screenVectors[axis].lengthSq() > 0.0001
+        ? Math.abs(mouseDirection.dot(screenVectors[axis].clone().normalize()))
+        : -1
+    ]));
+    const axis = ["x", "y", "z"].reduce((best, current) =>
+      scores[current] > scores[best] ? current : best, "x");
+    pointerState.axisConstraintAxis = axis;
+  }
+  const axis = pointerState.axisConstraintAxis;
+  const axisVector = screenVectors[axis];
+  const pixelsPerBlock = axisVector.length();
+  const amount = pixelsPerBlock > 0.001
+    ? Math.round(mouseDelta.dot(axisVector.clone().normalize()) / pixelsPerBlock)
+    : 0;
+  const constrained = cloneCell(origin);
+  constrained[axis] = THREE.MathUtils.clamp(origin[axis] + amount, 0, workspaceSize[axis] - 1);
+  return constrained;
 }
 
 function currentSelectionMask() {
@@ -2524,7 +2591,7 @@ function commitPendingPlacement() {
   placementScale = pending.scale;
   placementStretch = cloneStretch(pending.stretch || unitStretch());
   placementRotation = cloneRotation(pending.rotation);
-  applyCell(pending.origin, 0);
+  applyCell(effectiveTransformPlacementOrigin(pending.origin, pending.tool), 0);
   if (!isTransformPlacementTool(pending.tool) || pending.tool === "moveSelection") {
     placementScale = 1;
     placementStretch = unitStretch();
@@ -2543,6 +2610,18 @@ function isSpecialTransformTool(candidate = tool) {
 function isTransformPlacementTool(candidate = tool) {
   return candidate === "paste" || candidate === "moveSelection" ||
     isSpecialTransformTool(candidate);
+}
+
+function transformPlacementOriginalOrigin(candidate = tool) {
+  if (candidate === "paste") return cloneCell(clipboardSourceOrigin);
+  if (candidate === "moveSelection") return cloneCell(selectedBounds()?.min);
+  return null;
+}
+
+function effectiveTransformPlacementOrigin(origin, candidate = tool) {
+  if (pressedKeys.has("axisLock") && (candidate === "paste" || candidate === "moveSelection"))
+    return transformPlacementOriginalOrigin(candidate) || cloneCell(origin);
+  return cloneCell(origin);
 }
 
 function cancelPendingPlacement() {
@@ -2609,7 +2688,7 @@ canvas.addEventListener("pointerdown", event => {
   }
   const visualHandle = pickTransformHandle(event);
   if (visualHandle && isTransformPlacementTool() && event.button === 0) {
-    const origin = cloneCell(pendingPlacement?.origin || hoveredCell);
+    const origin = effectiveTransformPlacementOrigin(pendingPlacement?.origin || hoveredCell);
     if (!origin) return;
     placementScale = pendingPlacement?.scale ?? placementScale;
     placementStretch = cloneStretch(pendingPlacement?.stretch ?? placementStretch);
@@ -2637,7 +2716,7 @@ canvas.addEventListener("pointerdown", event => {
       commitPendingPlacement();
       return;
     }
-    const cell = pick(event, targetsAdjacentCell());
+    const cell = effectiveTransformPlacementOrigin(pick(event, targetsAdjacentCell()));
     if (!cell || !valid(cell)) return;
     pendingPlacement = {
       tool,
@@ -2690,7 +2769,7 @@ canvas.addEventListener("pointerdown", event => {
   if (isTransformPlacementTool() && event.button === 0 &&
       !event.altKey && !pendingPlacement?.locked) {
     if (pendingPlacement && pendingPlacement.tool !== tool) commitPendingPlacement();
-    const pickedCell = pick(event, targetsAdjacentCell());
+    const pickedCell = effectiveTransformPlacementOrigin(pick(event, targetsAdjacentCell()));
     if (!pickedCell || !valid(pickedCell)) {
       beginCameraDrag(event);
       return;
@@ -2759,13 +2838,14 @@ canvas.addEventListener("pointermove", event => {
   if (!pointerDown && pendingPlacement && pendingPlacement.tool === tool && !pendingPlacement.locked) {
     const followedCell = pick(event, targetsAdjacentCell());
     if (followedCell && valid(followedCell)) {
-      pendingPlacement.origin = cloneCell(followedCell);
+      if (!pressedKeys.has("axisLock") || (tool !== "paste" && tool !== "moveSelection"))
+        pendingPlacement.origin = cloneCell(followedCell);
       placementScale = pendingPlacement.scale;
       placementStretch = cloneStretch(pendingPlacement.stretch || unitStretch());
       placementRotation = cloneRotation(pendingPlacement.rotation);
       const badge = document.getElementById("scale-drag-badge");
       if (badge) badge.textContent = `${scaleText()} · ${rotationText(placementRotation)} · 우클릭 적용`;
-      updateGhostPreview(pendingPlacement.origin);
+      updateGhostPreview(effectiveTransformPlacementOrigin(pendingPlacement.origin));
     }
   }
   if (pointerDown?.mode === "selection") {
@@ -2778,7 +2858,13 @@ canvas.addEventListener("pointermove", event => {
     return;
   }
   if (pointerDown?.mode === "lasso") {
-    const cell = pick(event, false);
+    const pickedCell = pick(event, false);
+    const fallbackCell = pointerDown.currentCell || pointerDown.lastCell || pointerDown.origin;
+    const cell = pickedCell && valid(pickedCell)
+      ? constrainBrushCellToAutomaticAxis(pointerDown, pickedCell, event)
+      : pressedKeys.has("axisLock") && fallbackCell
+        ? constrainBrushCellToAutomaticAxis(pointerDown, fallbackCell, event)
+        : null;
     if (cell && valid(cell)) {
       addInterpolatedSelection(pointerDown.lastCell, cell);
       pointerDown.lastCell = cloneCell(cell);
@@ -2882,8 +2968,14 @@ canvas.addEventListener("pointermove", event => {
         clientX: startX + (event.clientX - startX) * amount,
         clientY: startY + (event.clientY - startY) * amount
       };
-      const sampledCell = pick(sampledEvent, targetsAdjacentCell());
-      if (!sampledCell || !valid(sampledCell)) continue;
+      const pickedCell = pick(sampledEvent, targetsAdjacentCell());
+      const fallbackCell = pointerDown.currentCell || pointerDown.lastCell || pointerDown.origin;
+      if ((!pickedCell || !valid(pickedCell)) && (!pressedKeys.has("axisLock") || !fallbackCell)) continue;
+      const sampledCell = constrainBrushCellToAutomaticAxis(
+        pointerDown,
+        pickedCell && valid(pickedCell) ? pickedCell : fallbackCell,
+        sampledEvent
+      );
       const sampledKey = key(sampledCell.x, sampledCell.y, sampledCell.z);
       if (sampledKey === previousKey) continue;
       sampledCandidates.push(cloneCell(sampledCell));
@@ -2951,7 +3043,11 @@ canvas.addEventListener("pointermove", event => {
         }
       }
       const lastCandidate = candidates[candidates.length - 1];
-      const afterPaint = tool === "place" ? null : pick(event, targetsAdjacentCell());
+      // 축 고정 중에는 조형·배치 도형이 미리보기 뒤의 바닥을 다시 집어
+      // 다음 경로 기준점으로 덮어쓰지 않게 한다.
+      const afterPaint = tool === "place" || pressedKeys.has("axisLock")
+        ? null
+        : pick(event, targetsAdjacentCell());
       pointerDown.lastCell = cloneCell(afterPaint && valid(afterPaint) ? afterPaint : lastCandidate);
       hoveredCell = cloneCell(pointerDown.lastCell);
       updateGhostPreview(pointerDown.lastCell);
@@ -3483,6 +3579,7 @@ function copySelection(cut = false) {
   placementStretch = unitStretch();
   placementRotation = zeroRotation();
   clipboardBlocks = [];
+  clipboardSourceOrigin = cloneCell(bounds.min);
   const selectedCells = selectedCellList();
   for (const { x, y, z } of selectedCells) {
     const type = blocks.get(key(x, y, z));
@@ -6232,7 +6329,7 @@ function animate(now = performance.now()) {
     else applyCell(activationCell, 0);
     if (tool === "place" || tool === "erase") pointerDown.lastAppliedBrushCenter = cloneCell(activationCell);
     pointerDown.activated = true;
-    if (lastPointer) {
+    if (lastPointer && !pressedKeys.has("axisLock")) {
       const afterPaint = pick(lastPointer, targetsAdjacentCell());
       if (afterPaint && valid(afterPaint)) {
         pointerDown.lastCell = cloneCell(afterPaint);
