@@ -15,6 +15,9 @@ let latestProjectOpenRequestId = 0;
 let structureProjectUri;
 let structureProjectWatcher;
 let structureContext;
+const pendingMcstructureExports = new Map();
+const pendingBpyExports = new Map();
+const pendingMcworldExports = new Map();
 
 function nbtName(value) {
   const data = Buffer.from(value, 'utf8');
@@ -45,6 +48,36 @@ function nbtByte(name, value) {
 
 function nbtString(name, value) {
   return nbtTag(8, name, Buffer.concat([nbtName(String(value))]));
+}
+
+function nbtIntPayload(value) {
+  const payload = Buffer.allocUnsafe(4);
+  payload.writeInt32LE(Math.trunc(Number(value) || 0));
+  return payload;
+}
+
+function nbtList(name, childType, payloads) {
+  return nbtTag(9, name, Buffer.concat([
+    Buffer.from([childType]),
+    nbtIntPayload(payloads.length),
+    ...payloads
+  ]));
+}
+
+function nbtCompound(name, tags = []) {
+  return nbtTag(10, name, Buffer.concat([...tags, Buffer.from([0])]));
+}
+
+function nbtIntList(name, values) {
+  return nbtList(name, 3, values.map(nbtIntPayload));
+}
+
+function nbtRawIntList(values) {
+  const payload = Buffer.allocUnsafe(5 + values.length * 4);
+  payload[0] = 3;
+  payload.writeInt32LE(values.length, 1);
+  for (let index = 0; index < values.length; index++) payload.writeInt32LE(values[index], 5 + index * 4);
+  return payload;
 }
 
 function createLevelDat(levelName, spawn = { x: 0, y: 2, z: 0 }) {
@@ -102,6 +135,91 @@ function blockPaletteEntry(id) {
       version: { type: 'int', value: 18168865 }
     }
   };
+}
+
+const MCSTRUCTURE_MAX_SIZE = { x: 64, y: 384, z: 64 };
+
+function mcstructureBounds(data) {
+  const size = {};
+  for (const axis of ['x', 'y', 'z']) {
+    size[axis] = Math.max(1, Math.trunc(Number(data?.size?.[axis]) || 1));
+  }
+  return {
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: size.x - 1, y: size.y - 1, z: size.z - 1 },
+    size
+  };
+}
+
+function assertMcstructureSize(size) {
+  const exceeded = ['x', 'y', 'z'].filter(axis => size[axis] > MCSTRUCTURE_MAX_SIZE[axis]);
+  if (!exceeded.length) return;
+  throw new Error(
+    `구조물 크기 ${size.x}×${size.y}×${size.z}가 Bedrock 제한 ` +
+    `${MCSTRUCTURE_MAX_SIZE.x}×${MCSTRUCTURE_MAX_SIZE.y}×${MCSTRUCTURE_MAX_SIZE.z}을 초과합니다 ` +
+    `(${exceeded.map(axis => axis.toUpperCase()).join(', ')}축)`
+  );
+}
+
+async function createMcstructure(data, target, onProgress = () => {}) {
+  const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+  const bounds = mcstructureBounds(data);
+  assertMcstructureSize(bounds.size);
+  onProgress(8, '블록 팔레트 구성 중…');
+  const paletteIds = [];
+  const paletteIndices = new Map();
+  for (const block of blocks) {
+    const id = safeBlockId(block.type);
+    if (!paletteIndices.has(id)) {
+      paletteIndices.set(id, paletteIds.length);
+      paletteIds.push(id);
+    }
+  }
+  const volume = bounds.size.x * bounds.size.y * bounds.size.z;
+  const primary = new Int32Array(volume);
+  const secondary = new Int32Array(volume);
+  primary.fill(-1);
+  secondary.fill(-1);
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index];
+    const x = Math.trunc(Number(block.x) || 0) - bounds.min.x;
+    const y = Math.trunc(Number(block.y) || 0) - bounds.min.y;
+    const z = Math.trunc(Number(block.z) || 0) - bounds.min.z;
+    const flatIndex = x * bounds.size.y * bounds.size.z + y * bounds.size.z + z;
+    primary[flatIndex] = paletteIndices.get(safeBlockId(block.type));
+    if (index % 5000 === 0) {
+      onProgress(10 + Math.floor(index / Math.max(1, blocks.length) * 42), '블록 인덱스 구성 중…');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
+  onProgress(56, 'Bedrock NBT 생성 중…');
+  const palettePayloads = paletteIds.map(id => Buffer.concat([
+    nbtString('name', id),
+    nbtCompound('states'),
+    nbtInt('version', 18168865),
+    Buffer.from([0])
+  ]));
+  const blockIndicesPayload = [primary, secondary].map(nbtRawIntList);
+  const root = Buffer.concat([
+    Buffer.from([10, 0, 0]),
+    nbtInt('format_version', 1),
+    nbtIntList('size', [bounds.size.x, bounds.size.y, bounds.size.z]),
+    nbtCompound('structure', [
+      nbtList('block_indices', 9, blockIndicesPayload),
+      nbtList('entities', 10, []),
+      nbtCompound('palette', [
+        nbtCompound('default', [
+          nbtList('block_palette', 10, palettePayloads),
+          nbtCompound('block_position_data')
+        ])
+      ])
+    ]),
+    nbtIntList('structure_world_origin', [0, 0, 0]),
+    Buffer.from([0])
+  ]);
+  onProgress(88, 'mcstructure 파일 기록 중…');
+  await fs.promises.writeFile(target, root);
+  onProgress(100, '완료');
 }
 
 async function addDirectoryToZip(zip, directory, prefix = '') {
@@ -247,6 +365,7 @@ function nonce() {
 function structureEditorHtml(webview, context) {
   const scriptUri = webview.asWebviewUri(vscode.Uri.file(context.asAbsolutePath(path.join('media', 'voxel-editor.bundle.js'))));
   const styleUri = webview.asWebviewUri(vscode.Uri.file(context.asAbsolutePath(path.join('media', 'voxel-editor.css'))));
+  const logoUri = webview.asWebviewUri(vscode.Uri.file(context.asAbsolutePath(path.join('media', 'bedrockpy-logo-128.png'))));
   const token = nonce();
   const blocks = [
     ['stone', 'Stone', '#7d8586'], ['dirt', 'Dirt', '#866043'],
@@ -270,15 +389,16 @@ function structureEditorHtml(webview, context) {
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">B</span><span>BedrockPy 3D</span></div>
+      <div class="brand"><img class="brand-mark" src="${logoUri}" alt="BedrockPy"><span>BedrockPy 3D</span></div>
       <button id="open-project">프로젝트 폴더 열기</button>
       <button id="open">열기</button>
       <button id="save">저장</button>
-      <button id="save-as">다른 이름으로</button>
+      <button id="save-as">다른 이름으로 저장</button>
       <div class="spacer"></div>
       <button class="icon-button" id="undo" title="실행 취소">↶</button>
       <button class="icon-button" id="redo" title="다시 실행">↷</button>
       <button id="export">.bpy로 내보내기</button>
+      <button id="export-mcstructure">.mcstructure로 내보내기</button>
       <button id="export-mcworld">.mcworld로 내보내기</button>
     </header>
     <div class="workspace">
@@ -462,6 +582,8 @@ function structureEditorHtml(webview, context) {
             <label for="render-distance">렌더링 거리 <span id="render-distance-value">256 blocks</span></label>
             <input id="render-distance" type="range" min="16" max="1024" step="16" value="256">
           </div>
+          <label class="check-field workspace-guide-toggle"><input id="show-map-boundary" type="checkbox" checked> 맵 외곽선 표시</label>
+          <label class="check-field workspace-guide-toggle"><input id="show-floor-grid" type="checkbox" checked> 바닥 격자 표시</label>
           <div class="brush-divider">시점 월드 좌표로 이동</div>
           <div class="size-grid">
             <label>X<input id="camera-jump-x" type="number" step="0.01" value="0"></label>
@@ -576,6 +698,9 @@ function structureEditorHtml(webview, context) {
       <button id="toggle-project-sidebar" class="project-sidebar-toggle" title="프로젝트 창 접기" aria-label="프로젝트 창 접기" aria-expanded="true">‹</button>
       <section class="viewport">
         <canvas id="scene" tabindex="0"></canvas>
+        <div id="cursor-task-progress" class="cursor-task-progress" hidden aria-hidden="true">
+          <div><i id="cursor-task-bar"></i></div>
+        </div>
         <div id="bpy-progress" class="bpy-progress" hidden role="status" aria-live="polite">
           <div class="bpy-progress-card">
             <strong id="bpy-progress-title">BedrockPy 코드 생성 중</strong>
@@ -595,7 +720,7 @@ function structureEditorHtml(webview, context) {
               <input id="play-sensitivity" type="range" min="10" max="200" step="1" value="100">
             </label>
           </div>
-          <span>좌클릭 드래그 시야 · WASD 이동 · Shift 달리기 · Space 점프 · Esc 종료</span>
+          <span>좌클릭 드래그 시야 · WASD 이동 · Shift 달리기 · Space 점프/두 번 비행 · Esc 종료</span>
         </div>
         <div id="brush-options-dock" class="brush-options-dock"></div>
         <div id="cursor-coordinate" class="cursor-coordinate">X — · Y — · Z —</div>
@@ -630,6 +755,9 @@ function structureEditorHtml(webview, context) {
           <label class="check-field clipboard-option">
             <input id="select-solid-only" type="checkbox"> 드래그 영역에서 설치된 블록 칸만 선택
           </label>
+          <label class="check-field clipboard-option">
+            <input id="selection-block-preview" type="checkbox" checked> 선택 영역 블록 미리보기
+          </label>
           <div class="selection-resize">
             <span>A 좌표</span>
             <div class="size-grid">
@@ -659,9 +787,18 @@ function structureEditorHtml(webview, context) {
         <section class="section" data-tool-panel="paste">
           <h2 class="section-title">클립보드</h2>
           <label class="check-field clipboard-option">
+            <input id="paste-area-preview" type="checkbox" checked> 이동 영역 미리보기
+          </label>
+          <label class="check-field clipboard-option">
             <input id="paste-air" type="checkbox"> 붙여넣을 때 공기도 적용하여 기존 블록 삭제
           </label>
           <span id="clipboard-count" class="clipboard-count">0 blocks</span>
+        </section>
+        <section class="section" data-tool-panel="moveSelection">
+          <h2 class="section-title">선택 이동</h2>
+          <label class="check-field clipboard-option">
+            <input id="move-selection-area-preview" type="checkbox" checked> 이동 영역 미리보기
+          </label>
         </section>
         <section class="section" data-tool-panel="selectBox lasso selectA selectB moveSelection">
           <h2 class="section-title">선택 영역 변형</h2>
@@ -703,22 +840,14 @@ function structureEditorHtml(webview, context) {
           <input id="time-of-day" type="range" min="0" max="23999" step="100" value="6000">
           <div id="time-value" class="time-value">12:00 · 6000 ticks</div>
         </section>
-        <section class="section" data-utility="code" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="코드·정보">
-          <h2 class="section-title">코드 생성</h2>
-          <div class="field">
-            <label for="function-name">함수 이름</label>
-            <input id="function-name" value="build_structure" spellcheck="false">
-          </div>
-          <p class="help">연속된 블록은 자동으로 <kbd>/fill</kbd>로 합치고 나머지는 <kbd>/setblock</kbd>으로 생성합니다.</p>
-        </section>
-        <section class="section" data-utility="stats" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="코드·정보">
+        <section class="section" data-utility="stats" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="정보">
           <h2 class="section-title">통계</h2>
           <div class="stat-list">
             <div class="stat"><span>블록</span><b id="block-count">0</b></div>
             <div class="stat"><span>종류</span><b id="type-count">0</b></div>
           </div>
         </section>
-        <section class="section" data-utility="help" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="코드·정보">
+        <section class="section" data-utility="help" data-utility-group="information" data-utility-icon="ⓘ" data-utility-label="정보">
           <h2 class="section-title">조작법</h2>
           <p class="help">
             <kbd>클릭</kbd> 블록 배치<br>
@@ -1657,32 +1786,96 @@ async function openStructureEditor(context, initialUri) {
       structurePanel.webview.postMessage({ type: 'bpyCoordinateModeSelected', mode: selected?.mode || null });
       return;
     }
-    if (message.type === 'export') {
+    if (message.type === 'requestBpyExport') {
+      const operationId = message.operationId;
       try {
         const target = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir(), `${message.functionName}.bpy`)),
+          defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir(), `${message.functionName || 'build_structure'}.bpy`)),
           filters: { 'BedrockPy Source': ['bpy'] },
           saveLabel: 'BedrockPy 코드 저장'
         });
         if (!target) {
-          structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId, cancelled: true });
+          structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, cancelled: true });
           return;
         }
-        await vscode.workspace.fs.writeFile(target, Buffer.from(message.code, 'utf8'));
-        structurePanel.webview.postMessage({ type: 'bpyOperationProgress', operationId: message.operationId, percent: 98, detail: '파일 여는 중…' });
-        const document = await vscode.workspace.openTextDocument(target);
-        await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
-        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId });
+        pendingBpyExports.set(operationId, target);
+        structurePanel.webview.postMessage({ type: 'bpyExportApproved', operationId });
       } catch (error) {
-        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId: message.operationId, error: error.message });
+        pendingBpyExports.delete(operationId);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
         vscode.window.showErrorMessage(`.bpy 파일을 내보낼 수 없습니다: ${error.message}`);
       }
       return;
     }
-    if (message.type === 'exportMcworld') {
+    if (message.type === 'export') {
       const operationId = message.operationId;
       try {
-        const sourceName = normalizedWorldFileName(message.data?.functionName || 'bedrockpy_structure');
+        const target = pendingBpyExports.get(operationId);
+        if (!target) throw new Error('내보내기 승인이 만료되었습니다. 다시 시도해주세요.');
+        pendingBpyExports.delete(operationId);
+        await vscode.workspace.fs.writeFile(target, Buffer.from(message.code, 'utf8'));
+        structurePanel.webview.postMessage({ type: 'bpyOperationProgress', operationId, percent: 98, detail: '파일 여는 중…' });
+        const document = await vscode.workspace.openTextDocument(target);
+        await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId });
+      } catch (error) {
+        pendingBpyExports.delete(operationId);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
+        vscode.window.showErrorMessage(`.bpy 파일을 내보낼 수 없습니다: ${error.message}`);
+      }
+      return;
+    }
+    if (message.type === 'requestMcstructureExport') {
+      const operationId = message.operationId;
+      try {
+        const bounds = mcstructureBounds({ size: message.size });
+        assertMcstructureSize(bounds.size);
+        const sourceName = normalizedWorldFileName(message.functionName || 'bedrockpy_structure');
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(path.join(
+            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir(),
+            `${sourceName}.mcstructure`
+          )),
+          filters: { 'Minecraft Bedrock Structure': ['mcstructure'] },
+          saveLabel: 'Minecraft 구조물 저장'
+        });
+        if (!target) {
+          structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, cancelled: true });
+          return;
+        }
+        pendingMcstructureExports.set(operationId, target);
+        structurePanel.webview.postMessage({ type: 'mcstructureExportApproved', operationId });
+      } catch (error) {
+        pendingMcstructureExports.delete(operationId);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
+        vscode.window.showErrorMessage(`.mcstructure 파일을 내보낼 수 없습니다: ${error.message}`);
+      }
+      return;
+    }
+    if (message.type === 'exportMcstructure') {
+      const operationId = message.operationId;
+      try {
+        const bounds = mcstructureBounds(message.data);
+        assertMcstructureSize(bounds.size);
+        const target = pendingMcstructureExports.get(operationId);
+        if (!target) throw new Error('내보내기 승인이 만료되었습니다. 다시 시도해주세요.');
+        pendingMcstructureExports.delete(operationId);
+        await createMcstructure(message.data, target.fsPath, (percent, detail) => {
+          structurePanel.webview.postMessage({ type: 'bpyOperationProgress', operationId, percent, detail });
+        });
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId });
+        vscode.window.showInformationMessage(`Minecraft 구조물을 내보냈습니다: ${target.fsPath}`);
+      } catch (error) {
+        pendingMcstructureExports.delete(operationId);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
+        vscode.window.showErrorMessage(`.mcstructure 파일을 내보낼 수 없습니다: ${error.message}`);
+      }
+      return;
+    }
+    if (message.type === 'requestMcworldExport') {
+      const operationId = message.operationId;
+      try {
+        const sourceName = normalizedWorldFileName(message.functionName || 'bedrockpy_structure');
         const target = await vscode.window.showSaveDialog({
           defaultUri: vscode.Uri.file(path.join(
             vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir(),
@@ -1695,12 +1888,28 @@ async function openStructureEditor(context, initialUri) {
           structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, cancelled: true });
           return;
         }
+        pendingMcworldExports.set(operationId, target);
+        structurePanel.webview.postMessage({ type: 'mcworldExportApproved', operationId });
+      } catch (error) {
+        pendingMcworldExports.delete(operationId);
+        structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
+        vscode.window.showErrorMessage(`.mcworld 파일을 내보낼 수 없습니다: ${error.message}`);
+      }
+      return;
+    }
+    if (message.type === 'exportMcworld') {
+      const operationId = message.operationId;
+      try {
+        const target = pendingMcworldExports.get(operationId);
+        if (!target) throw new Error('내보내기 승인이 만료되었습니다. 다시 시도해주세요.');
+        pendingMcworldExports.delete(operationId);
         await createMcworld(message.data, target.fsPath, (percent, detail) => {
           structurePanel.webview.postMessage({ type: 'bpyOperationProgress', operationId, percent, detail });
         });
         structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId });
         vscode.window.showInformationMessage(`Minecraft 월드를 내보냈습니다: ${target.fsPath}`);
       } catch (error) {
+        pendingMcworldExports.delete(operationId);
         structurePanel.webview.postMessage({ type: 'bpyOperationComplete', operationId, error: error.message });
         vscode.window.showErrorMessage(`.mcworld 파일을 내보낼 수 없습니다: ${error.message}`);
       }

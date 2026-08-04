@@ -401,6 +401,11 @@ let adaptiveGridStep = 1;
 
 function updateAdaptiveGrid(force = false) {
   if (!grid) return;
+  if (!document.getElementById("show-floor-grid")?.checked) {
+    grid.visible = false;
+    return;
+  }
+  grid.visible = true;
   const distanceToGround = Math.max(1, Math.abs(camera.position.y));
   // 어느 방향의 격자선도 1, 4, 16, 64... 계열만 사용한다.
   // 기본 단계까지 4배수로 고정해 높이에 따라 2, 8, 32 계열이 섞이지 않게 한다.
@@ -448,7 +453,7 @@ function updateAdaptiveGrid(force = false) {
     const step = gridStep * (4 ** level);
     // 카메라 주변의 가장 촘촘한 1×1 영역은 조금 넉넉하게 유지하고,
     // 바깥쪽만 4×4, 16×16 단계로 전환한다.
-    const outerRange = Math.min(maximumRange, gridStep * 160 * (4 ** level));
+    const outerRange = Math.min(maximumRange, gridStep * 224 * (4 ** level));
     const outerStartX = THREE.MathUtils.clamp(centerX - outerRange, 0, workspaceSize.x);
     const outerEndX = THREE.MathUtils.clamp(centerX + outerRange, 0, workspaceSize.x);
     const outerStartZ = THREE.MathUtils.clamp(centerZ - outerRange, 0, workspaceSize.z);
@@ -528,6 +533,17 @@ function rebuildWorkspaceGuides() {
   ground.position.set(workspaceSize.x / 2, -0.001, workspaceSize.z / 2);
   ground.userData.ground = true;
   scene.add(ground);
+  updateWorkspaceGuideVisibility(false);
+}
+
+function updateWorkspaceGuideVisibility(markDirty = true) {
+  if (boundary) boundary.visible = document.getElementById("show-map-boundary")?.checked !== false;
+  if (grid) {
+    const showGrid = document.getElementById("show-floor-grid")?.checked !== false;
+    grid.visible = showGrid;
+    if (showGrid) updateAdaptiveGrid(true);
+  }
+  if (markDirty) markCurrentProjectFileDirty();
 }
 rebuildWorkspaceGuides();
 
@@ -566,12 +582,15 @@ function clearGhost() {
   brushPreviewSignature = "";
 }
 
-function recordLiveEditPreview(x, y, z, erase = false) {
-  if (!groupedMutation) return;
+function recordLiveEditPreview(x, y, z, erase = false, force = false) {
+  if ((!groupedMutation && !force) || (applyingDeferredBrushJob && !force)) return;
   const position = key(x, y, z);
+  const previewColor = erase ? 0xff5555
+    : tool === "sculpt" ? 0x66d9c7
+      : blockColor(activeBlock);
   const previewLimit = tool === "sculpt" ? 400 : 1200;
   if (liveEditPreviewCells.has(position)) liveEditPreviewCells.delete(position);
-  liveEditPreviewCells.set(position, erase);
+  liveEditPreviewCells.set(position, { erase, color: previewColor });
   while (liveEditPreviewCells.size > previewLimit) {
     liveEditPreviewCells.delete(liveEditPreviewCells.keys().next().value);
   }
@@ -598,16 +617,21 @@ function renderLiveEditPreview() {
   const previewPointLimit = tool === "sculpt" ? 250 : 600;
   const stride = Math.max(1, Math.ceil(entries.length / previewPointLimit));
   const positions = [];
+  const colors = [];
+  const color = new THREE.Color();
   for (let index = 0; index < entries.length; index += stride) {
-    const [position] = entries[index];
+    const [position, preview] = entries[index];
     const [x, y, z] = position.split(",").map(Number);
     positions.push(x + 0.5, y + 0.5, z + 0.5);
+    color.setHex(preview.color);
+    colors.push(color.r, color.g, color.b);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  const erase = tool === "erase";
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   const material = new THREE.PointsMaterial({
-    color: erase ? 0xff5555 : tool === "sculpt" ? 0x66d9c7 : blockColor(activeBlock),
+    color: 0xffffff,
+    vertexColors: true,
     size: 7,
     sizeAttenuation: false,
     transparent: true,
@@ -1305,6 +1329,7 @@ let placementScale = 1;
 let placementStretch = { x: 1, y: 1, z: 1 };
 let placementRotation = { x: 0, y: 0, z: 0 };
 let pendingPlacement = null;
+let lastMoveSelectionClick = null;
 let transformMode = "scale";
 let transformAxis = "y";
 const zeroRotation = () => ({ x: 0, y: 0, z: 0 });
@@ -1420,6 +1445,7 @@ window.addEventListener("keydown", event => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const keyName = movementCodeNames[event.code];
   if (keyName) {
+    if (playMode && keyName === "space" && !event.repeat) handlePlayJumpTap();
     pressedKeys.add(keyName);
     event.preventDefault();
     if (keyName === "axisLock" && (tool === "paste" || tool === "moveSelection")) refreshHover();
@@ -1438,6 +1464,8 @@ let playMode = false;
 let playerPosition = new THREE.Vector3();
 let playerVelocityY = 0;
 let playerGrounded = false;
+let playerFlying = false;
+let lastPlayJumpTapAt = 0;
 let playerYaw = 0;
 let playerPitch = 0;
 let playLookPointer = null;
@@ -1448,6 +1476,18 @@ let selectionVisibilityBeforePlay = null;
 const playerHalfWidth = 0.3;
 const playerHeight = 1.8;
 const playerEyeHeight = 1.62;
+
+function handlePlayJumpTap() {
+  const now = performance.now();
+  if (lastPlayJumpTapAt && now - lastPlayJumpTapAt <= 350) {
+    playerFlying = !playerFlying;
+    playerVelocityY = 0;
+    playerGrounded = false;
+    lastPlayJumpTapAt = 0;
+    return;
+  }
+  lastPlayJumpTapAt = now;
+}
 
 function playerCollides(position) {
   if (position.y < 0) return true;
@@ -1533,6 +1573,8 @@ function enterPlayMode() {
   }
   playerVelocityY = 0;
   playerGrounded = false;
+  playerFlying = false;
+  lastPlayJumpTapAt = 0;
   playerYaw = Math.atan2(-editorCameraDirection.x, -editorCameraDirection.z);
   playerPitch = Math.asin(THREE.MathUtils.clamp(editorCameraDirection.y, -1, 1));
   selectionVisibilityBeforePlay = {
@@ -1559,6 +1601,8 @@ function exitPlayMode() {
   playMode = false;
   pressedKeys.clear();
   playerVelocityY = 0;
+  playerFlying = false;
+  lastPlayJumpTapAt = 0;
   playLookPointer = null;
   editorViewpointBeforePlay = null;
   selectionVisibilityBeforePlay = null;
@@ -1574,13 +1618,22 @@ function movePlayer(deltaSeconds) {
   const forwardAmount = (pressedKeys.has("w") ? 1 : 0) - (pressedKeys.has("s") ? 1 : 0);
   const rightAmount = (pressedKeys.has("d") ? 1 : 0) - (pressedKeys.has("a") ? 1 : 0);
   const length = Math.hypot(forwardAmount, rightAmount) || 1;
-  const speed = (pressedKeys.has("shift") ? 8.6 : 4.3) * deltaSeconds;
+  const movementSpeed = playerFlying ? 7.2 : pressedKeys.has("shift") ? 8.6 : 4.3;
+  const speed = movementSpeed * deltaSeconds;
   const forwardX = -Math.sin(playerYaw);
   const forwardZ = -Math.cos(playerYaw);
   const rightX = Math.cos(playerYaw);
   const rightZ = -Math.sin(playerYaw);
   movePlayerAxis("x", (forwardX * forwardAmount + rightX * rightAmount) / length * speed);
   movePlayerAxis("z", (forwardZ * forwardAmount + rightZ * rightAmount) / length * speed);
+  if (playerFlying) {
+    const verticalAmount = (pressedKeys.has("space") ? 1 : 0) - (pressedKeys.has("shift") ? 1 : 0);
+    movePlayerAxis("y", verticalAmount * movementSpeed * deltaSeconds);
+    playerVelocityY = 0;
+    playerGrounded = false;
+    updatePlayCamera();
+    return;
+  }
   if (pressedKeys.has("space") && playerGrounded) {
     playerVelocityY = 8.4;
     playerGrounded = false;
@@ -1668,6 +1721,7 @@ function jumpCameraToCoordinate() {
     baseCoordinate.x, baseCoordinate.y, baseCoordinate.z
   ));
   if (playMode) {
+    selectionSurfaceBuildToken++;
     playerPosition.set(desired.x, desired.y - playerEyeHeight, desired.z);
     playerVelocityY = 0;
     playerGrounded = false;
@@ -2046,12 +2100,20 @@ function replaceComposedChunk(chunkKey, before, after) {
     for (let z = startZ; z < startZ + renderChunkSize; z++) columnTopCache.delete(`${x},${z}`);
   }
   dirtyRenderChunks.add(chunkKey);
-  dirtyRenderChunks.add(`${chunkX - 1},${chunkY},${chunkZ}`);
-  dirtyRenderChunks.add(`${chunkX + 1},${chunkY},${chunkZ}`);
-  dirtyRenderChunks.add(`${chunkX},${chunkY - 1},${chunkZ}`);
-  dirtyRenderChunks.add(`${chunkX},${chunkY + 1},${chunkZ}`);
-  dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ - 1}`);
-  dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ + 1}`);
+  const changedPositions = new Set([...before.keys(), ...after.keys()]);
+  for (const position of changedPositions) {
+    if (before.get(position) === after.get(position)) continue;
+    const [x, y, z] = position.split(",").map(Number);
+    const localX = x - chunkX * renderChunkSize;
+    const localY = y - chunkY * renderChunkSize;
+    const localZ = z - chunkZ * renderChunkSize;
+    if (localX === 0) dirtyRenderChunks.add(`${chunkX - 1},${chunkY},${chunkZ}`);
+    if (localX === renderChunkSize - 1) dirtyRenderChunks.add(`${chunkX + 1},${chunkY},${chunkZ}`);
+    if (localY === 0) dirtyRenderChunks.add(`${chunkX},${chunkY - 1},${chunkZ}`);
+    if (localY === renderChunkSize - 1) dirtyRenderChunks.add(`${chunkX},${chunkY + 1},${chunkZ}`);
+    if (localZ === 0) dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ - 1}`);
+    if (localZ === renderChunkSize - 1) dirtyRenderChunks.add(`${chunkX},${chunkY},${chunkZ + 1}`);
+  }
 }
 
 function rebuildChangedLayerChunks(beforeState, afterState, markDirty = true) {
@@ -2436,22 +2498,44 @@ function rebuild(forceAll = false, streamingOnly = false) {
   const faceDefinitions = [
     { textureFace: "east", neighbor: [1, 0, 0], normal: [1, 0, 0], axis: 0, u: 1, v: 2, flipU: true, corners: [[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },
     { textureFace: "west", neighbor: [-1, 0, 0], normal: [-1, 0, 0], axis: 0, u: 1, v: 2, corners: [[0,0,1],[0,1,1],[0,1,0],[0,0,0]] },
-    { textureFace: "up", neighbor: [0, 1, 0], normal: [0, 1, 0], axis: 1, u: 0, v: 2, corners: [[0,1,1],[1,1,1],[1,1,0],[0,1,0]] },
-    { textureFace: "down", neighbor: [0, -1, 0], normal: [0, -1, 0], axis: 1, u: 0, v: 2, corners: [[0,0,0],[1,0,0],[1,0,1],[0,0,1]] },
     { textureFace: "south", neighbor: [0, 0, 1], normal: [0, 0, 1], axis: 2, u: 0, v: 1, corners: [[1,0,1],[1,1,1],[0,1,1],[0,0,1]] },
-    { textureFace: "north", neighbor: [0, 0, -1], normal: [0, 0,-1], axis: 2, u: 0, v: 1, flipU: true, corners: [[0,0,0],[0,1,0],[1,1,0],[1,0,0]] }
+    { textureFace: "north", neighbor: [0, 0, -1], normal: [0, 0,-1], axis: 2, u: 0, v: 1, flipU: true, corners: [[0,0,0],[0,1,0],[1,1,0],[1,0,0]] },
+    { textureFace: "up", neighbor: [0, 1, 0], normal: [0, 1, 0], axis: 1, u: 0, v: 2, corners: [[0,1,1],[1,1,1],[1,1,0],[0,1,0]] },
+    { textureFace: "down", neighbor: [0, -1, 0], normal: [0, -1, 0], axis: 1, u: 0, v: 2, corners: [[0,0,0],[1,0,0],[1,0,1],[0,0,1]] }
   ];
   for (const activeChunkKey of chunksToBuild) {
-    ensureBlockChunkLoaded(activeChunkKey);
     const [chunkX, chunkY, chunkZ] = activeChunkKey.split(",").map(Number);
     const grouped = new Map();
     const startX = chunkX * renderChunkSize;
     const startY = chunkY * renderChunkSize;
     const startZ = chunkZ * renderChunkSize;
+    const neighborChunkKeys = [
+      activeChunkKey,
+      `${chunkX - 1},${chunkY},${chunkZ}`, `${chunkX + 1},${chunkY},${chunkZ}`,
+      `${chunkX},${chunkY - 1},${chunkZ}`, `${chunkX},${chunkY + 1},${chunkZ}`,
+      `${chunkX},${chunkY},${chunkZ - 1}`, `${chunkX},${chunkY},${chunkZ + 1}`
+    ];
+    const occupancySide = renderChunkSize + 2;
+    const occupancy = new Uint8Array(occupancySide ** 3);
+    const occupancyIndex = (x, y, z) =>
+      (x + 1) + (y + 1) * occupancySide + (z + 1) * occupancySide * occupancySide;
+    for (const neighborKey of neighborChunkKeys) {
+      ensureBlockChunkLoaded(neighborKey);
+      for (const position of blockChunkPositions.get(neighborKey) || []) {
+        const [x, y, z] = position.split(",").map(Number);
+        const localX = x - startX, localY = y - startY, localZ = z - startZ;
+        if (localX < -1 || localX > renderChunkSize ||
+            localY < -1 || localY > renderChunkSize ||
+            localZ < -1 || localZ > renderChunkSize) continue;
+        occupancy[occupancyIndex(localX, localY, localZ)] = 1;
+      }
+    }
+    const occupied = (x, y, z) => occupancy[occupancyIndex(x, y, z)] !== 0;
     for (const position of blockChunkPositions.get(activeChunkKey) || []) {
-      const type = blocks.get(position);
+      const type = Map.prototype.get.call(blocks, position);
       if (!type) continue;
-      const coordinates = position.split(",").map(Number);
+      const [x, y, z] = position.split(",").map(Number);
+      const coordinates = [x - startX, y - startY, z - startZ];
       if (!grouped.has(type)) grouped.set(type, []);
       grouped.get(type).push(coordinates);
     }
@@ -2465,35 +2549,38 @@ function rebuild(forceAll = false, streamingOnly = false) {
     let mergedFaceCount = 0;
     for (const face of faceDefinitions) {
       const faceVertexStart = positions.length / 3;
-      const planes = new Map();
+      const faceMask = new Uint8Array(renderChunkSize ** 3);
       for (const cell of cells) {
         const [x, y, z] = cell;
         const [dx, dy, dz] = face.neighbor;
-        if (blocks.has(key(x + dx, y + dy, z + dz))) continue;
+        if (occupied(x + dx, y + dy, z + dz)) continue;
         const plane = cell[face.axis];
-        if (!planes.has(plane)) planes.set(plane, new Set());
-        planes.get(plane).add(`${cell[face.u]},${cell[face.v]}`);
+        faceMask[plane * 256 + cell[face.u] * 16 + cell[face.v]] = 1;
       }
-      for (const [plane, remaining] of planes) {
-        while (remaining.size) {
-          const first = remaining.values().next().value;
-          const [startU, startV] = first.split(",").map(Number);
+      for (let plane = 0; plane < renderChunkSize; plane++) {
+        const planeOffset = plane * 256;
+        for (let startU = 0; startU < renderChunkSize; startU++) {
+          for (let startV = 0; startV < renderChunkSize; startV++) {
+          const firstIndex = planeOffset + startU * 16 + startV;
+          if (!faceMask[firstIndex]) continue;
           let width = 1;
-          while (remaining.has(`${startU + width},${startV}`)) width++;
+          while (startU + width < renderChunkSize &&
+                 faceMask[planeOffset + (startU + width) * 16 + startV]) width++;
           let height = 1;
           grow: while (true) {
+            if (startV + height >= renderChunkSize) break;
             for (let offset = 0; offset < width; offset++) {
-              if (!remaining.has(`${startU + offset},${startV + height}`)) break grow;
+              if (!faceMask[planeOffset + (startU + offset) * 16 + startV + height]) break grow;
             }
             height++;
           }
           for (let du = 0; du < width; du++)
             for (let dv = 0; dv < height; dv++)
-              remaining.delete(`${startU + du},${startV + dv}`);
-          const base = [0, 0, 0];
-          base[face.axis] = plane;
-          base[face.u] = startU;
-          base[face.v] = startV;
+              faceMask[planeOffset + (startU + du) * 16 + startV + dv] = 0;
+          const base = [startX, startY, startZ];
+          base[face.axis] += plane;
+          base[face.u] += startU;
+          base[face.v] += startV;
           const expandedCorners = face.corners.map(corner => {
             const point = [...base];
             point[face.axis] += corner[face.axis];
@@ -2518,6 +2605,7 @@ function rebuild(forceAll = false, streamingOnly = false) {
             uvs.push(...vertexUvs[vertexIndex]);
           });
           mergedFaceCount++;
+          }
         }
       }
       const faceVertexCount = positions.length / 3 - faceVertexStart;
@@ -2532,11 +2620,26 @@ function rebuild(forceAll = false, streamingOnly = false) {
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-    materialGroups.forEach((group, index) => geometry.addGroup(group.start, group.count, index));
     geometry.computeBoundingSphere();
     visibleFacesForChunk += mergedFaceCount;
     const definition = blockTypes[shortBlockId(type)] || { color: blockColor(type) };
-    const materials = materialGroups.map(group => sharedChunkMaterial(type, group.face, definition));
+    const materials = [];
+    const drawGroups = [];
+    for (const group of materialGroups) {
+      const material = sharedChunkMaterial(type, group.face, definition);
+      const previous = drawGroups.at(-1);
+      if (previous && previous.material === material && previous.start + previous.count === group.start) {
+        previous.count += group.count;
+        continue;
+      }
+      let materialIndex = materials.indexOf(material);
+      if (materialIndex < 0) {
+        materialIndex = materials.length;
+        materials.push(material);
+      }
+      drawGroups.push({ ...group, material, materialIndex });
+    }
+    drawGroups.forEach(group => geometry.addGroup(group.start, group.count, group.materialIndex));
     const material = materials.length === 1 ? materials[0] : materials;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = chunkShadowMode;
@@ -2608,6 +2711,12 @@ function updateSelection(previewOnly = false) {
     selectionFill.visible = false;
     return;
   }
+  // 박스 선택을 드래그하는 동안에는 이전 비동기 표면 작업을 취소하고
+  // 가벼운 외곽선만 갱신한다. 내부 블록 미리보기는 pointerup 이후 한 번 생성한다.
+  if (previewOnly) {
+    selectionSurfaceBuildToken++;
+    clearSelectionSurfaceMesh();
+  }
   if (selectionMask.size) {
     const selectionCount = selectionMask.size;
     const instanceLimit = selectionCount <= 1000 ? selectionCount : 0;
@@ -2638,7 +2747,7 @@ function updateSelection(previewOnly = false) {
       const geometry = new THREE.BoxGeometry(1.035, 1.035, 1.035);
       const material = new THREE.MeshBasicMaterial({
         color: 0xc6a8ff, transparent: true, opacity: adaptiveOpacity,
-        depthTest: selectionCount > 256, depthWrite: false, wireframe: true
+        depthTest: false, depthWrite: false, wireframe: true
       });
       selectionMaskMesh = new THREE.InstancedMesh(geometry, material, sampledPositions.length);
       selectionMaskMesh.renderOrder = 26;
@@ -2663,8 +2772,9 @@ function updateSelection(previewOnly = false) {
       selectionBox.material.opacity = selectionCount > 10000 ? 0.58 : 0.72;
       selectionBox.visible = true;
       selectionFill.visible = false;
-      renderSelectionSurfacePreview(bounds);
+      scheduleSelectionSurfacePreview(bounds);
     } else {
+      selectionSurfaceBuildToken++;
       clearSelectionSurfaceMesh();
       selectionBox.visible = false;
       selectionFill.visible = false;
@@ -2672,6 +2782,7 @@ function updateSelection(previewOnly = false) {
     return;
   }
   if (!selectionA || !selectionB) {
+    selectionSurfaceBuildToken++;
     clearSelectionSurfaceMesh();
     selectionBoundsCache = null;
     selectionBox.visible = false;
@@ -2696,6 +2807,10 @@ function updateSelection(previewOnly = false) {
   selectionBox.position.set((min.x + max.x + 1) / 2, (min.y + max.y + 1) / 2, (min.z + max.z + 1) / 2);
   selectionBox.material.opacity = 1;
   selectionBox.visible = true;
+  if (previewOnly) {
+    selectionFill.visible = false;
+    return;
+  }
   selectionFill.geometry.dispose();
   selectionFill.geometry = new THREE.BoxGeometry(
     max.x - min.x + 1.03, max.y - min.y + 1.03, max.z - min.z + 1.03
@@ -2705,8 +2820,9 @@ function updateSelection(previewOnly = false) {
   const selectionVolume = (max.x - min.x + 1) * (max.y - min.y + 1) * (max.z - min.z + 1);
   if (selectionVolume > 1000) {
     selectionFill.visible = false;
-    if (!previewOnly) renderSelectionSurfacePreview({ min, max });
+    if (!previewOnly) scheduleSelectionSurfacePreview({ min, max });
   } else {
+    selectionSurfaceBuildToken++;
     clearSelectionSurfaceMesh();
   }
 }
@@ -2723,15 +2839,19 @@ resize();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
-function pick(event, adjacent = false) {
+function pick(event, adjacent = false, blockSourceOverride = null) {
   const rect = canvas.getBoundingClientRect();
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  return traceVoxelRay(raycaster.ray.origin, raycaster.ray.direction, adjacent, true);
+  const layerAwareSelection = tool === "move" || tool === "moveSelection" ||
+    tool === "replace" || tool === "lasso" ||
+    tool === "selectA" || tool === "selectB";
+  return traceVoxelRay(raycaster.ray.origin, raycaster.ray.direction, adjacent, true,
+    blockSourceOverride || (layerAwareSelection ? activeLayer()?.blocks : blocks));
 }
 
-function traceVoxelRay(origin, direction, adjacent = false, includeGround = false) {
+function traceVoxelRay(origin, direction, adjacent = false, includeGround = false, blockSource = blocks) {
   const maximumDistance = renderDistanceBlocks() + renderChunkSize;
   const epsilon = 1e-10;
   let x = Math.floor(origin.x);
@@ -2757,7 +2877,7 @@ function traceVoxelRay(origin, direction, adjacent = false, includeGround = fals
   while (distance <= maximumDistance) {
     if (x >= 0 && y >= 0 && z >= 0 &&
         x < workspaceSize.x && y < workspaceSize.y && z < workspaceSize.z &&
-        blocks.has(key(x, y, z))) {
+        blockSource?.has(key(x, y, z))) {
       return adjacent && previous ? previous : { x, y, z };
     }
     previous = { x, y, z };
@@ -2920,6 +3040,8 @@ function brushRange() {
 }
 
 function addSelectionBrush(cell) {
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
   const range = brushRange();
   const round = document.getElementById("brush-shape")?.value === "sphere";
   const radius = (range.size - 1) / 2;
@@ -2928,7 +3050,8 @@ function addSelectionBrush(cell) {
       for (let z = cell.z + range.min; z <= cell.z + range.max; z++) {
         if (!valid({ x, y, z })) continue;
         if (round && radius > 0 && Math.hypot(x - cell.x, y - cell.y, z - cell.z) > radius + 0.35) continue;
-        selectionMask.add(key(x, y, z));
+        const position = key(x, y, z);
+        if (layerBlocks.has(position)) selectionMask.add(position);
       }
 }
 
@@ -3024,8 +3147,10 @@ function currentSelectionMask() {
 }
 
 function selectConnectedAt(start, additive = false, sameTypeOnly = true) {
-  const sourceType = blocks.get(key(start.x, start.y, start.z));
-  if (!sourceType) return;
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return false;
+  const sourceType = layerBlocks.get(key(start.x, start.y, start.z));
+  if (!sourceType) return false;
   const combined = additive ? currentSelectionMask() : new Set();
   const visited = new Set();
   const queue = [cloneCell(start)];
@@ -3034,13 +3159,13 @@ function selectConnectedAt(start, additive = false, sameTypeOnly = true) {
     const position = key(cell.x, cell.y, cell.z);
     if (visited.has(position)) continue;
     visited.add(position);
-    const currentType = blocks.get(position);
+    const currentType = layerBlocks.get(position);
     if (!currentType || (sameTypeOnly && currentType !== sourceType)) continue;
     combined.add(position);
     for (const [dx, dy, dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
       const neighbor = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
       const neighborPosition = key(neighbor.x, neighbor.y, neighbor.z);
-      const neighborType = blocks.get(neighborPosition);
+      const neighborType = layerBlocks.get(neighborPosition);
       if (valid(neighbor) && !visited.has(neighborPosition) && neighborType &&
           (!sameTypeOnly || neighborType === sourceType)) queue.push(neighbor);
     }
@@ -3051,6 +3176,7 @@ function selectConnectedAt(start, additive = false, sameTypeOnly = true) {
   updateSelection();
   updateStats();
   refreshHover();
+  return true;
 }
 
 function cellInSelection(cell) {
@@ -3070,72 +3196,56 @@ function insideBrush(center, x, y, z, range, round, radius) {
   return !round || !radius || Math.hypot(x - center.x, y - center.y, z - center.z) <= radius + 0.35;
 }
 
-function applyBrushVoxel(x, y, z, erase) {
+function applyBrushVoxel(x, y, z, erase, config = null) {
   const cell = { x, y, z };
-  if (!valid(cell) || !brushAllowed(cell)) return;
-  const occupied = blocks.has(key(x, y, z));
-  if (!erase && document.getElementById("place-air-only")?.checked && occupied) return;
-  if (!erase && document.getElementById("place-solid-only")?.checked && !occupied) return;
+  const allowed = config
+    ? !config.limitToSelection || cellInSelection(cell)
+    : brushAllowed(cell);
+  if (!valid(cell) || !allowed) return;
+  const occupied = activeLayer()?.blocks.has(key(x, y, z)) || false;
+  const airOnly = config?.airOnly ?? document.getElementById("place-air-only")?.checked;
+  const solidOnly = config?.solidOnly ?? document.getElementById("place-solid-only")?.checked;
+  if (!erase && airOnly && occupied) return;
+  if (!erase && solidOnly && !occupied) return;
   recordLiveEditPreview(x, y, z, erase);
   if (erase) blocks.delete(key(x, y, z));
-  else blocks.set(key(x, y, z), activeBlock);
+  else blocks.set(key(x, y, z), config?.block || activeBlock);
 }
 
-function paintBrush(cell, erase = false, previousCenter = null) {
-  const range = brushRange();
+function paintBrush(cell, erase = false, previousCenter = null, config = null) {
+  const range = config?.range || brushRange();
   const radius = (range.size - 1) / 2;
-  const round = document.getElementById("brush-shape")?.value === "sphere";
+  const round = config?.round ?? document.getElementById("brush-shape")?.value === "sphere";
   for (let x = cell.x + range.min; x <= cell.x + range.max; x++)
     for (let y = cell.y + range.min; y <= cell.y + range.max; y++)
       for (let z = cell.z + range.min; z <= cell.z + range.max; z++) {
         if (!insideBrush(cell, x, y, z, range, round, radius)) continue;
         if (previousCenter && insideBrush(previousCenter, x, y, z, range, round, radius)) continue;
-        applyBrushVoxel(x, y, z, erase);
+        applyBrushVoxel(x, y, z, erase, config);
       }
+}
+
+function appendDeferredBrushCenter(pointerState, listName, setName, cell, erase = false) {
+  if (!pointerState[listName]) pointerState[listName] = [];
+  if (!pointerState[setName]) pointerState[setName] = new Set();
+  const position = key(cell.x, cell.y, cell.z);
+  if (pointerState[setName].has(position)) return false;
+  pointerState[setName].add(position);
+  pointerState[listName].push(cloneCell(cell));
+  recordLiveEditPreview(cell.x, cell.y, cell.z, erase, true);
+  return true;
 }
 
 function planPlacementBrush(pointerState, cell, previousCenter = null) {
-  if (!pointerState.deferredPlacementCenters) pointerState.deferredPlacementCenters = [];
-  const lastCenter = pointerState.deferredPlacementCenters.at(-1);
-  if (!lastCenter || lastCenter.x !== cell.x || lastCenter.y !== cell.y || lastCenter.z !== cell.z)
-    pointerState.deferredPlacementCenters.push(cloneCell(cell));
-  const range = brushRange();
-  const radius = (range.size - 1) / 2;
-  const round = document.getElementById("brush-shape")?.value === "sphere";
-  for (let x = cell.x + range.min; x <= cell.x + range.max; x++)
-    for (let y = cell.y + range.min; y <= cell.y + range.max; y++)
-      for (let z = cell.z + range.min; z <= cell.z + range.max; z++) {
-        if (!insideBrush(cell, x, y, z, range, round, radius)) continue;
-        if (previousCenter && insideBrush(previousCenter, x, y, z, range, round, radius)) continue;
-        const target = { x, y, z };
-        if (!valid(target) || !brushAllowed(target)) continue;
-        const position = key(x, y, z);
-        const occupied = blocks.has(position);
-        if (document.getElementById("place-air-only")?.checked && occupied) continue;
-        if (document.getElementById("place-solid-only")?.checked && !occupied) continue;
-        recordLiveEditPreview(x, y, z, false);
-      }
+  appendDeferredBrushCenter(
+    pointerState, "deferredPlacementCenters", "deferredPlacementCenterKeys", cell, false
+  );
 }
 
 function planDeletionBrush(pointerState, cell, previousCenter = null) {
-  if (!pointerState.deferredDeletionCenters) pointerState.deferredDeletionCenters = [];
-  const lastCenter = pointerState.deferredDeletionCenters.at(-1);
-  if (!lastCenter || lastCenter.x !== cell.x || lastCenter.y !== cell.y || lastCenter.z !== cell.z)
-    pointerState.deferredDeletionCenters.push(cloneCell(cell));
-  const range = brushRange();
-  const radius = (range.size - 1) / 2;
-  const round = document.getElementById("brush-shape")?.value === "sphere";
-  for (let x = cell.x + range.min; x <= cell.x + range.max; x++)
-    for (let y = cell.y + range.min; y <= cell.y + range.max; y++)
-      for (let z = cell.z + range.min; z <= cell.z + range.max; z++) {
-        if (!insideBrush(cell, x, y, z, range, round, radius)) continue;
-        if (previousCenter && insideBrush(previousCenter, x, y, z, range, round, radius)) continue;
-        const target = { x, y, z };
-        if (!valid(target) || !brushAllowed(target)) continue;
-        const position = key(x, y, z);
-        if (!blocks.has(position)) continue;
-        recordLiveEditPreview(x, y, z, true);
-      }
+  appendDeferredBrushCenter(
+    pointerState, "deferredDeletionCenters", "deferredDeletionCenterKeys", cell, true
+  );
 }
 
 function planSculptCenter(pointerState, cell) {
@@ -3151,18 +3261,9 @@ function isDeferredShapeTool(currentTool = tool) {
 }
 
 function planGeneratedShape(pointerState, center) {
-  if (!pointerState.deferredGeneratedCenters) pointerState.deferredGeneratedCenters = [];
-  const lastCenter = pointerState.deferredGeneratedCenters.at(-1);
-  if (!lastCenter || lastCenter.x !== center.x || lastCenter.y !== center.y || lastCenter.z !== center.z)
-    pointerState.deferredGeneratedCenters.push(cloneCell(center));
-  const generator = tool.slice("generate:".length);
-  for (const cell of collectGeneratedCells(generator, center)) {
-    const position = key(cell.x, cell.y, cell.z);
-    const occupied = blocks.has(position);
-    if (document.getElementById("place-air-only")?.checked && occupied) continue;
-    if (document.getElementById("place-solid-only")?.checked && !occupied) continue;
-    recordLiveEditPreview(cell.x, cell.y, cell.z, false);
-  }
+  appendDeferredBrushCenter(
+    pointerState, "deferredGeneratedCenters", "deferredGeneratedCenterKeys", center, false
+  );
 }
 
 function scaledPlacement(origin, items) {
@@ -3244,16 +3345,15 @@ function applyCell(cell, eventButton = 0) {
     const placement = scaledPlacement(cell, clipboardBlocks);
     mutate(() => placement.forEach(targetCell => {
       const { x, y, z, type } = targetCell;
-      if (!valid(targetCell) || !brushAllowed(targetCell)) return;
+      if (!valid(targetCell)) return;
       if (type === "__air__") {
         if (document.getElementById("paste-air")?.checked) blocks.delete(key(x, y, z));
-      } else putGenerated(x, y, z, type);
+      } else putGenerated(x, y, z, type, false);
     }));
     return;
   }
   if (tool === "replace") {
-    if (document.getElementById("connected-replace")?.checked) floodFillAt(cell);
-    else replaceAt(cell);
+    void runReplaceOperation(cell, Boolean(document.getElementById("connected-replace")?.checked));
     return;
   }
   if (tool === "moveSelection") {
@@ -3326,17 +3426,41 @@ function hideTransformBadge() {
 function commitPendingPlacement() {
   if (!pendingPlacement) return;
   const pending = pendingPlacement;
+  const preservePlacementMode = pending.tool === "paste" || pending.tool === "moveSelection";
+  const continueLocked = pending.locked === true;
+  const appliedOrigin = effectiveTransformPlacementOrigin(pending.origin, pending.tool);
   pendingPlacement = null;
   placementScale = pending.scale;
   placementStretch = cloneStretch(pending.stretch || unitStretch());
   placementRotation = cloneRotation(pending.rotation);
-  applyCell(effectiveTransformPlacementOrigin(pending.origin, pending.tool), 0);
+  applyCell(appliedOrigin, 0);
   if (!isTransformPlacementTool(pending.tool) || pending.tool === "moveSelection") {
     placementScale = 1;
     placementStretch = unitStretch();
     placementRotation = zeroRotation();
   }
   hideTransformBadge();
+  if (preservePlacementMode) {
+    const nextOrigin = pending.tool === "moveSelection"
+      ? transformPlacementOriginalOrigin("moveSelection") || cloneCell(appliedOrigin)
+      : cloneCell(appliedOrigin);
+    pendingPlacement = {
+      tool: pending.tool,
+      origin: nextOrigin,
+      scale: placementScale,
+      stretch: cloneStretch(placementStretch),
+      rotation: cloneRotation(placementRotation),
+      locked: continueLocked
+    };
+    if (continueLocked) {
+      const badge = document.getElementById("scale-drag-badge");
+      if (badge) {
+        badge.textContent = `${scaleText()} · ${rotationText(placementRotation)} · 핸들 드래그 · 우클릭 적용`;
+        badge.classList.add("visible");
+      }
+      document.getElementById("transform-gizmo")?.classList.add("visible");
+    }
+  }
   ghostSignature = "";
   refreshHover();
 }
@@ -3371,6 +3495,16 @@ function cancelPendingPlacement() {
   hideTransformBadge();
   ghostSignature = "";
   refreshHover();
+}
+
+function unlockOriginalTransformPlacement() {
+  if (!pendingPlacement?.locked ||
+      (pendingPlacement.tool !== "paste" && pendingPlacement.tool !== "moveSelection")) return false;
+  pendingPlacement.locked = false;
+  hideTransformBadge();
+  ghostSignature = "";
+  refreshHover();
+  return true;
 }
 
 function transformPlacementState(source, sourceTool = tool) {
@@ -3419,6 +3553,22 @@ function restoreTransformPlacementState(state) {
 }
 
 canvas.addEventListener("contextmenu", event => event.preventDefault());
+function selectConnectedFromMoveDoubleClick(event, restartMoveSelection = false) {
+  const cell = pick(event, false, activeLayer()?.blocks);
+  if (!cell || !valid(cell)) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (restartMoveSelection) cancelPendingPlacement();
+  if (!selectConnectedAt(cell, event.shiftKey, false)) return false;
+  if (restartMoveSelection) setTool("move");
+  setTool("moveSelection");
+  return true;
+}
+
+canvas.addEventListener("dblclick", event => {
+  if (playMode || tool !== "move" || event.button !== 0) return;
+  selectConnectedFromMoveDoubleClick(event);
+});
 canvas.addEventListener("auxclick", event => {
   if (event.button === 1) event.preventDefault();
 });
@@ -3448,10 +3598,6 @@ function beginCameraDrag(event, mode = "camera") {
 }
 
 canvas.addEventListener("pointerdown", event => {
-  if (deferredBrushCommitActive) {
-    beginCameraDrag(event, "cameraDuringCommit");
-    return;
-  }
   if (playMode) {
     if (event.button !== 0) return;
     playLookPointer = {
@@ -3471,6 +3617,23 @@ canvas.addEventListener("pointerdown", event => {
     return;
   }
   const visualHandle = pickTransformHandle(event);
+  // VS Code Webview에서는 PointerEvent.detail이 클릭 횟수를 제공하지 않는 경우가 있어
+  // 시간과 화면 좌표로 선택 이동의 더블클릭을 직접 판별한다.
+  if (tool === "moveSelection" && event.button === 0 && !visualHandle) {
+    const now = performance.now();
+    const previous = lastMoveSelectionClick;
+    const isDoubleClick = Boolean(previous && now - previous.time <= 350 &&
+      Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 8);
+    lastMoveSelectionClick = isDoubleClick ? null : {
+      time: now, x: event.clientX, y: event.clientY
+    };
+    if (isDoubleClick) {
+      selectConnectedFromMoveDoubleClick(event, true);
+      return;
+    }
+  } else if (visualHandle) {
+    lastMoveSelectionClick = null;
+  }
   if (visualHandle && isTransformPlacementTool() && event.button === 0) {
     const origin = effectiveTransformPlacementOrigin(pendingPlacement?.origin || hoveredCell);
     if (!origin) return;
@@ -3614,6 +3777,7 @@ canvas.addEventListener("pointerdown", event => {
 });
 canvas.addEventListener("pointermove", event => {
   lastPointer = { clientX: event.clientX, clientY: event.clientY };
+  positionCursorTaskProgress();
   if (!pointerDown) highlightTransformHandle(pickTransformHandle(event));
   else if (pointerDown.mode === "visualTransform") {
     highlightTransformHandle({ kind: pointerDown.kind, axis: pointerDown.axis }, true);
@@ -3767,7 +3931,7 @@ canvas.addEventListener("pointermove", event => {
       previousKey = sampledKey;
     }
     const candidates = [];
-    if (tool === "place" || tool === "erase" || tool === "sculpt") {
+    if (tool === "place" || tool === "erase" || tool === "sculpt" || isDeferredShapeTool()) {
       let previous = pointerDown.lastCell;
       for (const sampled of sampledCandidates) {
         candidates.push(...interpolatedBrushCenters(previous, sampled));
@@ -3855,16 +4019,50 @@ canvas.addEventListener("pointermove", event => {
   refreshHover();
 });
 let deferredBrushCommitActive = false;
+let applyingDeferredBrushJob = false;
+const deferredBrushJobs = [];
+let deferredBrushProgressTotal = 0;
+let deferredBrushProgressProcessed = 0;
+
+function deferredBrushProgressLabel(kind) {
+  if (kind === "erase") return "블록 삭제 중";
+  if (kind === "sculpt") return "조형 적용 중";
+  if (kind?.startsWith("generate:")) return "도형 생성 중";
+  return "블록 설치 중";
+}
+
+function captureDeferredBrushConfig(kind) {
+  const range = brushRange();
+  return {
+    kind,
+    block: activeBlock,
+    range: { ...range },
+    round: document.getElementById("brush-shape")?.value === "sphere",
+    airOnly: Boolean(document.getElementById("place-air-only")?.checked),
+    solidOnly: Boolean(document.getElementById("place-solid-only")?.checked),
+    limitToSelection: Boolean(document.getElementById("limit-to-selection")?.checked),
+    mode: document.getElementById("sculpt-mode")?.value || "smooth",
+    strength: Math.max(1, Number(document.getElementById("sculpt-strength")?.value || 1))
+  };
+}
 
 async function commitDeferredBrushPath(state, centers, applyCenter) {
   if (!centers.length) return;
-  deferredBrushCommitActive = true;
+  const progressLabel = deferredBrushProgressLabel(state?.progressKind);
+  updateCursorTaskProgress(
+    "brush",
+    deferredBrushProgressProcessed / Math.max(1, deferredBrushProgressTotal) * 94,
+    progressLabel
+  );
+  await nextUiFrame();
+  groupedMutation = true;
   remember();
   let index = 0;
   let previousCenter = null;
   try {
     while (index < centers.length) {
       const frameStartedAt = performance.now();
+      applyingDeferredBrushJob = true;
       beginBulkMutation();
       try {
         do {
@@ -3874,19 +4072,66 @@ async function commitDeferredBrushPath(state, centers, applyCenter) {
         } while (index < centers.length && performance.now() - frameStartedAt < 5);
       } finally {
         endBulkMutation();
+        applyingDeferredBrushJob = false;
       }
       updateStatsLightweight();
+      deferredBrushProgressProcessed = state.progressOffset + index;
+      updateCursorTaskProgress(
+        "brush",
+        deferredBrushProgressProcessed / Math.max(1, deferredBrushProgressTotal) * 94,
+        progressLabel
+      );
       if (index < centers.length) await nextUiFrame();
     }
     markCurrentProjectFileDirty();
     pendingGroupedRebuild = true;
   } finally {
     groupedMutation = false;
-    await flushGroupedRebuildAsync();
+    applyingDeferredBrushJob = false;
+    await commitUndoTransactionAsync();
+  }
+}
+
+async function processDeferredBrushJobs() {
+  if (deferredBrushCommitActive) return;
+  deferredBrushCommitActive = true;
+  try {
+    while (deferredBrushJobs.length) {
+      const job = deferredBrushJobs.shift();
+      job.state.progressOffset = deferredBrushProgressProcessed;
+      await commitDeferredBrushPath(job.state, job.centers, job.applyCenter);
+    }
+  } finally {
     deferredBrushCommitActive = false;
+    if (pendingGroupedRebuild) {
+      pendingGroupedRebuild = false;
+      scheduleEditRebuild();
+    }
     clearLiveEditPreview();
     refreshHover();
+    deferredBrushProgressProcessed = deferredBrushProgressTotal;
+    updateCursorTaskProgress("brush", 100, "작업 완료");
+    hideCursorTaskProgress("brush");
+    deferredBrushProgressTotal = 0;
+    deferredBrushProgressProcessed = 0;
   }
+}
+
+function enqueueDeferredBrushPath(state, centers, applyCenter) {
+  if (!centers?.length) return;
+  if (!deferredBrushCommitActive && !deferredBrushJobs.length) {
+    deferredBrushProgressTotal = 0;
+    deferredBrushProgressProcessed = 0;
+  }
+  const copiedCenters = centers.map(cloneCell);
+  deferredBrushProgressTotal += copiedCenters.length;
+  deferredBrushJobs.push({ state, centers: copiedCenters, applyCenter });
+  updateCursorTaskProgress(
+    "brush",
+    deferredBrushProgressProcessed / Math.max(1, deferredBrushProgressTotal) * 94,
+    deferredBrushProgressLabel(state?.progressKind)
+  );
+  void processDeferredBrushJobs();
 }
 
 canvas.addEventListener("pointerup", event => {
@@ -3905,11 +4150,12 @@ canvas.addEventListener("pointerup", event => {
       selectionB = null;
       selectionMask = combined;
     }
-    keepOnlyInstalledSelection();
-    updateSelection();
-    updateStats();
     pointerDown = null;
-    refreshHover();
+    void keepOnlyInstalledSelection().then(() => {
+      updateSelection();
+      updateStats();
+      refreshHover();
+    });
     return;
   }
   if (pointerDown.mode === "scalePlacement" || pointerDown.mode === "visualTransform") {
@@ -3942,42 +4188,67 @@ canvas.addEventListener("pointerup", event => {
     refreshHover();
     return;
   }
-  if (pointerDown.mode === "cameraDuringCommit") {
-    pointerDown = null;
-    canvas.style.cursor = "";
-    refreshHover();
-    return;
-  }
   if (pointerDown.mode === "armedBrush") {
     if (!pointerDown.activated) {
-      applyCell(pointerDown.currentCell || pointerDown.origin, 0);
+      const center = pointerDown.currentCell || pointerDown.origin;
+      if (tool === "place" || tool === "erase" || tool === "sculpt") {
+        const state = pointerDown;
+        state.progressKind = tool;
+        const config = captureDeferredBrushConfig(tool);
+        pointerDown = null;
+        enqueueDeferredBrushPath(state, [center], tool === "place"
+          ? (cell, previous) => paintBrush(cell, false, previous, config)
+          : tool === "erase"
+            ? (cell, previous) => paintBrush(cell, true, previous, config)
+            : cell => sculptAt(cell, config));
+        return;
+      }
+      if (isDeferredShapeTool()) {
+        const state = pointerDown;
+        state.progressKind = tool;
+        const generator = tool.slice("generate:".length);
+        pointerDown = null;
+        enqueueDeferredBrushPath(state, [center], shapeCenter => {
+          for (const generated of collectGeneratedCells(generator, shapeCenter))
+            putGenerated(generated.x, generated.y, generated.z, generated.type);
+        });
+        return;
+      }
+      applyCell(center, 0);
     } else if (tool === "place" && pointerDown.deferredPlacementCenters?.length) {
       const state = pointerDown;
+      state.progressKind = "place";
+      const config = captureDeferredBrushConfig("place");
       pointerDown = null;
-      void commitDeferredBrushPath(state, state.deferredPlacementCenters,
-        (center, previous) => paintBrush(center, false, previous));
+      enqueueDeferredBrushPath(state, state.deferredPlacementCenters,
+        (center, previous) => paintBrush(center, false, previous, config));
       return;
     } else if (tool === "erase" && pointerDown.deferredDeletionCenters?.length) {
       const state = pointerDown;
+      state.progressKind = "erase";
+      const config = captureDeferredBrushConfig("erase");
       pointerDown = null;
-      void commitDeferredBrushPath(state, state.deferredDeletionCenters,
-        (center, previous) => paintBrush(center, true, previous));
+      enqueueDeferredBrushPath(state, state.deferredDeletionCenters,
+        (center, previous) => paintBrush(center, true, previous, config));
       return;
     } else if (tool === "sculpt" && pointerDown.deferredSculptCenters?.length) {
       const state = pointerDown;
+      state.progressKind = "sculpt";
+      const config = captureDeferredBrushConfig("sculpt");
       pointerDown = null;
-      void commitDeferredBrushPath(state, state.deferredSculptCenters,
-        center => sculptAt(center));
+      enqueueDeferredBrushPath(state, state.deferredSculptCenters,
+        center => sculptAt(center, config));
       return;
     } else if (isDeferredShapeTool() && pointerDown.deferredGeneratedCenters?.length) {
-      remember();
-      mutate(() => {
-        const generator = tool.slice("generate:".length);
-        for (const center of pointerDown.deferredGeneratedCenters) {
-          for (const cell of collectGeneratedCells(generator, center))
-            putGenerated(cell.x, cell.y, cell.z, cell.type);
-        }
+      const state = pointerDown;
+      state.progressKind = tool;
+      const generator = tool.slice("generate:".length);
+      pointerDown = null;
+      enqueueDeferredBrushPath(state, state.deferredGeneratedCenters, center => {
+        for (const cell of collectGeneratedCells(generator, center))
+          putGenerated(cell.x, cell.y, cell.z, cell.type);
       });
+      return;
     }
     groupedMutation = false;
     pointerDown = null;
@@ -4013,8 +4284,9 @@ canvas.addEventListener("wheel", event => {
 
 function setTool(next) {
   const previousTool = tool;
+  if (next !== "moveSelection" || previousTool !== next) lastMoveSelectionClick = null;
   if (previousTool === "generate:curve" && next !== previousTool) resetCurveControlPoints();
-  if (pendingPlacement && next !== tool) commitPendingPlacement();
+  if (pendingPlacement && next !== tool) cancelPendingPlacement();
   if (next === "moveSelection" && previousTool !== next) {
     placementScale = 1;
     placementStretch = unitStretch();
@@ -4026,6 +4298,26 @@ function setTool(next) {
     placementRotation = zeroRotation();
   }
   tool = next;
+  if ((next === "moveSelection" || next === "paste") && previousTool !== next) {
+    const origin = transformPlacementOriginalOrigin(next);
+    if (origin) {
+      pendingPlacement = {
+        tool: next,
+        origin,
+        scale: placementScale,
+        stretch: cloneStretch(placementStretch),
+        rotation: cloneRotation(placementRotation),
+        locked: true
+      };
+      const badge = document.getElementById("scale-drag-badge");
+      if (badge) {
+        badge.textContent = `${scaleText()} · ${rotationText(placementRotation)} · 핸들 드래그 · 우클릭 적용`;
+        badge.classList.add("visible");
+      }
+      document.getElementById("transform-gizmo")?.classList.add("visible");
+      ghostSignature = "";
+    }
+  }
   document.querySelectorAll("[data-tool], [data-generator]").forEach(button => {
     const buttonTool = button.dataset.tool || `generate:${button.dataset.generator}`;
     button.classList.toggle("active", buttonTool === tool);
@@ -4310,14 +4602,42 @@ function selectedCellList() {
   return cells;
 }
 
-function keepOnlyInstalledSelection() {
+let selectionSolidFilterToken = 0;
+async function keepOnlyInstalledSelection() {
+  const token = ++selectionSolidFilterToken;
   if (!document.getElementById("select-solid-only")?.checked) return;
-  const occupied = selectedCellList().filter(cell => blocks.has(key(cell.x, cell.y, cell.z)));
-  selectionMask = new Set(occupied.map(cell => key(cell.x, cell.y, cell.z)));
+  const bounds = selectedBounds();
+  if (!bounds) return;
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  const occupied = new Set();
+  const relevantChunks = [...layerBlocks.chunkCounts().keys()].filter(chunkKey => {
+    const [chunkX, chunkY, chunkZ] = chunkKey.split(",").map(Number);
+    const minX = chunkX * renderChunkSize;
+    const minY = chunkY * renderChunkSize;
+    const minZ = chunkZ * renderChunkSize;
+    return minX <= bounds.max.x && minX + renderChunkSize - 1 >= bounds.min.x &&
+      minY <= bounds.max.y && minY + renderChunkSize - 1 >= bounds.min.y &&
+      minZ <= bounds.max.z && minZ + renderChunkSize - 1 >= bounds.min.z;
+  });
+  let frameStartedAt = performance.now();
+  for (const chunkKey of relevantChunks) {
+    if (token !== selectionSolidFilterToken) return;
+    layerBlocks.ensureChunk(chunkKey);
+    for (const position of layerBlocks.chunkPositions.get(chunkKey) || []) {
+      const [x, y, z] = position.split(",").map(Number);
+      if (x >= bounds.min.x && x <= bounds.max.x && y >= bounds.min.y && y <= bounds.max.y &&
+          z >= bounds.min.z && z <= bounds.max.z) occupied.add(position);
+    }
+    if (performance.now() - frameStartedAt >= 5) {
+      await nextUiFrame();
+      frameStartedAt = performance.now();
+    }
+  }
+  if (token !== selectionSolidFilterToken) return;
+  selectionMask = occupied;
   selectionA = null;
   selectionB = null;
-  updateSelection();
-  updateStats();
 }
 
 function syncSelectionInputs() {
@@ -4371,18 +4691,21 @@ function inBounds(cell, bounds) {
   );
 }
 
-function copySelection(cut = false) {
+function copySelection(cut = false, preserveTransformState = false) {
   const bounds = selectedBounds();
   if (!bounds) return;
-  if (pendingPlacement) cancelPendingPlacement();
-  placementScale = 1;
-  placementStretch = unitStretch();
-  placementRotation = zeroRotation();
+  if (!preserveTransformState) {
+    if (pendingPlacement) cancelPendingPlacement();
+    placementScale = 1;
+    placementStretch = unitStretch();
+    placementRotation = zeroRotation();
+  }
   clipboardBlocks = [];
   clipboardSourceOrigin = cloneCell(bounds.min);
   const selectedCells = selectedCellList();
+  const layerBlocks = activeLayer()?.blocks;
   for (const { x, y, z } of selectedCells) {
-    const type = blocks.get(key(x, y, z));
+    const type = layerBlocks?.get(key(x, y, z));
     clipboardBlocks.push({
       x: x - bounds.min.x,
       y: y - bounds.min.y,
@@ -4399,10 +4722,11 @@ function copySelection(cut = false) {
 }
 
 function selectAllStructure() {
-  if (!blocks.size) return;
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks?.size) return;
   const minimum = { x: Infinity, y: Infinity, z: Infinity };
   const maximum = { x: -Infinity, y: -Infinity, z: -Infinity };
-  for (const position of blocks.keys()) {
+  for (const position of layerBlocks.keys()) {
     const [x, y, z] = position.split(",").map(Number);
     minimum.x = Math.min(minimum.x, x);
     minimum.y = Math.min(minimum.y, y);
@@ -4420,7 +4744,9 @@ function selectAllStructure() {
 }
 
 function floodFillAt(start) {
-  const sourceType = blocks.get(key(start.x, start.y, start.z));
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  const sourceType = layerBlocks.get(key(start.x, start.y, start.z));
   if (!sourceType || sourceType === activeBlock) return;
   const hasSelectionLimit = selectionMask.size > 0 || Boolean(selectionA && selectionB);
   if (hasSelectionLimit && !cellInSelection(start)) return;
@@ -4433,13 +4759,13 @@ function floodFillAt(start) {
     const cellKey = key(cell.x, cell.y, cell.z);
     if (visited.has(cellKey)) continue;
     visited.add(cellKey);
-    if (blocks.get(cellKey) !== sourceType) continue;
+    if (layerBlocks.get(cellKey) !== sourceType) continue;
     if (hasSelectionLimit && !cellInSelection(cell)) continue;
     connected.push(cellKey);
     for (const [dx, dy, dz] of directions) {
       const next = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
       const nextKey = key(next.x, next.y, next.z);
-      if (valid(next) && !visited.has(nextKey) && blocks.get(nextKey) === sourceType) {
+      if (valid(next) && !visited.has(nextKey) && layerBlocks.get(nextKey) === sourceType) {
         queue.push(next);
       }
     }
@@ -4451,16 +4777,118 @@ function floodFillAt(start) {
 }
 
 function replaceAt(cell) {
-  const sourceType = blocks.get(key(cell.x, cell.y, cell.z));
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  const sourceType = layerBlocks.get(key(cell.x, cell.y, cell.z));
   if (!sourceType || sourceType === activeBlock) return;
   const selected = selectedCellList();
   if (!selected.length) return;
   mutate(() => {
     selected.forEach(({ x, y, z }) => {
       const position = key(x, y, z);
-      if (blocks.get(position) === sourceType) blocks.set(position, activeBlock);
+      if (layerBlocks.get(position) === sourceType) blocks.set(position, activeBlock);
     });
   });
+}
+
+function* selectedCellIterator() {
+  if (selectionMask.size) {
+    for (const position of selectionMask) {
+      const [x, y, z] = position.split(",").map(Number);
+      yield { x, y, z };
+    }
+    return;
+  }
+  const bounds = selectedBounds();
+  if (!bounds) return;
+  for (let x = bounds.min.x; x <= bounds.max.x; x++)
+    for (let y = bounds.min.y; y <= bounds.max.y; y++)
+      for (let z = bounds.min.z; z <= bounds.max.z; z++) yield { x, y, z };
+}
+
+let replaceOperationActive = false;
+async function runReplaceOperation(start, connectedOnly) {
+  if (replaceOperationActive) return;
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  const sourceType = layerBlocks.get(key(start.x, start.y, start.z));
+  if (!sourceType || sourceType === activeBlock) return;
+  const hasSelectionLimit = selectionMask.size > 0 || Boolean(selectionA && selectionB);
+  if (hasSelectionLimit && !cellInSelection(start)) return;
+  replaceOperationActive = true;
+  updateCursorTaskProgress("replace", 0, "블록 교체 중");
+  await nextUiFrame();
+  const replacementType = activeBlock;
+  const targets = [];
+  try {
+    if (connectedOnly) {
+      const queue = [cloneCell(start)];
+      const visited = new Set();
+      const directions = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+      let index = 0;
+      while (index < queue.length) {
+        const frameStartedAt = performance.now();
+        while (index < queue.length && performance.now() - frameStartedAt < 5) {
+          const cell = queue[index++];
+          const position = key(cell.x, cell.y, cell.z);
+          if (visited.has(position)) continue;
+          visited.add(position);
+          if (layerBlocks.get(position) !== sourceType || (hasSelectionLimit && !cellInSelection(cell))) continue;
+          targets.push(position);
+          for (const [dx, dy, dz] of directions) {
+            const next = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
+            const nextPosition = key(next.x, next.y, next.z);
+            if (valid(next) && !visited.has(nextPosition) && layerBlocks.get(nextPosition) === sourceType)
+              queue.push(next);
+          }
+        }
+        updateCursorTaskProgress("replace", index / Math.max(1, queue.length) * 48, "연결 블록 찾는 중");
+        if (index < queue.length) await nextUiFrame();
+      }
+    } else {
+      const total = selectionCellCount();
+      let processed = 0;
+      let frameStartedAt = performance.now();
+      for (const cell of selectedCellIterator()) {
+        const position = key(cell.x, cell.y, cell.z);
+        if (layerBlocks.get(position) === sourceType) targets.push(position);
+        processed++;
+        if (performance.now() - frameStartedAt >= 5) {
+          updateCursorTaskProgress("replace", processed / Math.max(1, total) * 48, "교체 블록 찾는 중");
+          await nextUiFrame();
+          frameStartedAt = performance.now();
+        }
+      }
+    }
+    if (!targets.length) return;
+    groupedMutation = true;
+    remember();
+    let index = 0;
+    while (index < targets.length) {
+      const frameStartedAt = performance.now();
+      beginBulkMutation();
+      try {
+        while (index < targets.length && performance.now() - frameStartedAt < 5)
+          blocks.set(targets[index++], replacementType);
+      } finally {
+        endBulkMutation();
+      }
+      updateCursorTaskProgress("replace", 48 + index / targets.length * 46, "블록 교체 중");
+      if (index < targets.length) await nextUiFrame();
+    }
+    markCurrentProjectFileDirty();
+    pendingGroupedRebuild = true;
+  } finally {
+    groupedMutation = false;
+    await commitUndoTransactionAsync();
+    if (pendingGroupedRebuild) {
+      pendingGroupedRebuild = false;
+      scheduleEditRebuild();
+    }
+    updateStatsLightweight();
+    replaceOperationActive = false;
+    hideCursorTaskProgress("replace");
+  }
 }
 
 function moveSelectionTo(anchor) {
@@ -4468,11 +4896,12 @@ function moveSelectionTo(anchor) {
   const selected = selectedCellList();
   if (!bounds || !selected.length) return;
   const wasMask = selectionMask.size > 0;
+  const layerBlocks = activeLayer()?.blocks;
   const moved = scaledPlacement(anchor, selected.map(source => ({
     x: source.x - bounds.min.x,
     y: source.y - bounds.min.y,
     z: source.z - bounds.min.z,
-    type: blocks.get(key(source.x, source.y, source.z))
+    type: layerBlocks?.get(key(source.x, source.y, source.z))
   })));
   if (moved.some(targetCell => !valid(targetCell))) return;
   mutate(() => {
@@ -4502,28 +4931,30 @@ document.getElementById("paste-selection")?.addEventListener("click", () => {
 });
 
 function terrainColumns(bounds = selectedBounds()) {
+  const layerBlocks = activeLayer()?.blocks;
   const minX = bounds?.min.x ?? 0, maxX = bounds?.max.x ?? workspaceSize.x - 1;
   const minZ = bounds?.min.z ?? 0, maxZ = bounds?.max.z ?? workspaceSize.z - 1;
   const result = new Map();
   for (let x = minX; x <= maxX; x++)
     for (let z = minZ; z <= maxZ; z++) {
-      result.set(`${x},${z}`, columnTop(x, z));
+      result.set(`${x},${z}`, columnTop(x, z, layerBlocks));
     }
   return { heights: result, minX, maxX, minZ, maxZ };
 }
 
-function nearbyTerrainBlockType(x, z, preferredY = 0) {
+function nearbyTerrainBlockType(x, z, preferredY = 0, blockSource = activeLayer()?.blocks) {
+  if (!blockSource) return null;
   const counts = new Map();
   const columns = [[x, z], [x - 1, z], [x + 1, z], [x, z - 1], [x, z + 1]];
   for (const [sampleX, sampleZ] of columns) {
     if (sampleX < 0 || sampleZ < 0 || sampleX >= workspaceSize.x || sampleZ >= workspaceSize.z) continue;
-    let sampleY = columnTop(sampleX, sampleZ);
+    let sampleY = columnTop(sampleX, sampleZ, blockSource);
     if (sampleX === x && sampleZ === z && preferredY >= 0) sampleY = Math.min(sampleY, preferredY);
-    while (sampleY >= 0 && !blocks.has(key(sampleX, sampleY, sampleZ))) sampleY--;
-    const type = sampleY >= 0 ? blocks.get(key(sampleX, sampleY, sampleZ)) : null;
+    while (sampleY >= 0 && !blockSource.has(key(sampleX, sampleY, sampleZ))) sampleY--;
+    const type = sampleY >= 0 ? blockSource.get(key(sampleX, sampleY, sampleZ)) : null;
     if (type) counts.set(type, (counts.get(type) || 0) + 1);
   }
-  let selectedType = "stone";
+  let selectedType = null;
   let selectedCount = 0;
   for (const [type, count] of counts) {
     if (count > selectedCount) {
@@ -4534,12 +4965,14 @@ function nearbyTerrainBlockType(x, z, preferredY = 0) {
   return selectedType;
 }
 
-function setColumnHeight(x, z, current, targetHeight) {
+function setColumnHeight(x, z, current, targetHeight, blockSource = activeLayer()?.blocks) {
+  if (!blockSource) return;
   const targetTop = THREE.MathUtils.clamp(Math.round(targetHeight), -1, workspaceSize.y - 1);
   if (targetTop > current) {
     const fillType = current >= 0
-      ? blocks.get(key(x, current, z)) || nearbyTerrainBlockType(x, z, current)
-      : nearbyTerrainBlockType(x, z);
+      ? blockSource.get(key(x, current, z)) || nearbyTerrainBlockType(x, z, current, blockSource)
+      : nearbyTerrainBlockType(x, z, 0, blockSource);
+    if (!fillType) return;
     for (let y = current + 1; y <= targetTop; y++) {
       recordLiveEditPreview(x, y, z, false);
       blocks.set(key(x, y, z), fillType);
@@ -4552,7 +4985,13 @@ function setColumnHeight(x, z, current, targetHeight) {
   }
 }
 
-function columnTop(x, z) {
+function columnTop(x, z, blockSource = activeLayer()?.blocks) {
+  if (!blockSource) return -1;
+  if (blockSource !== blocks) {
+    let layerTop = workspaceSize.y - 1;
+    while (layerTop >= 0 && !blockSource.has(key(x, layerTop, z))) layerTop--;
+    return layerTop;
+  }
   const columnKey = `${x},${z}`;
   if (columnTopCache.has(columnKey)) return columnTopCache.get(columnKey);
   let top = workspaceSize.y - 1;
@@ -4561,12 +5000,14 @@ function columnTop(x, z) {
   return top;
 }
 
-function thermalErodeColumns(columns, iterations, minY = 0, maxY = workspaceSize.y - 1) {
+function thermalErodeColumns(columns, iterations, minY = 0, maxY = workspaceSize.y - 1,
+  blockSource = activeLayer()?.blocks) {
+  if (!blockSource) return;
   const allowed = new Set(columns.map(column => `${column.x},${column.z}`));
   const heights = new Map();
   for (const column of columns) {
-    let top = Math.min(maxY, columnTop(column.x, column.z));
-    while (top >= minY && !blocks.has(key(column.x, top, column.z))) top--;
+    let top = Math.min(maxY, columnTop(column.x, column.z, blockSource));
+    while (top >= minY && !blockSource.has(key(column.x, top, column.z))) top--;
     heights.set(`${column.x},${column.z}`, top);
   }
   const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -4589,7 +5030,7 @@ function thermalErodeColumns(columns, iterations, minY = 0, maxY = workspaceSize
       // 높이 차이가 두 칸 이상일 때만 한 블록을 낮은 이웃으로 흘려보낸다.
       if (!destination || sourceY - destination.y <= 1 || destination.y + 1 > maxY) continue;
       const sourceKey = key(x, sourceY, z);
-      const type = blocks.get(sourceKey);
+      const type = blockSource.get(sourceKey);
       if (!type) continue;
       const targetY = Math.max(minY, destination.y + 1);
       blocks.delete(sourceKey);
@@ -4597,7 +5038,7 @@ function thermalErodeColumns(columns, iterations, minY = 0, maxY = workspaceSize
       recordLiveEditPreview(x, sourceY, z, true);
       recordLiveEditPreview(destination.x, targetY, destination.z, false);
       let nextSourceY = sourceY - 1;
-      while (nextSourceY >= minY && !blocks.has(key(x, nextSourceY, z))) nextSourceY--;
+      while (nextSourceY >= minY && !blockSource.has(key(x, nextSourceY, z))) nextSourceY--;
       heights.set(position, nextSourceY);
       heights.set(destination.key, targetY);
       movedThisPass = true;
@@ -4607,6 +5048,8 @@ function thermalErodeColumns(columns, iterations, minY = 0, maxY = workspaceSize
 }
 
 function smoothVoxelObject(bounds, iterations, allowed = () => true, options = {}) {
+  const blockSource = options.blockSource || activeLayer()?.blocks;
+  if (!blockSource) return;
   const removeThreshold = options.removeThreshold ?? 7;
   const fillThreshold = options.fillThreshold ?? 18;
   const bridgeGaps = Boolean(options.bridgeGaps);
@@ -4628,7 +5071,7 @@ function smoothVoxelObject(bounds, iterations, allowed = () => true, options = {
             if (inside(cell)) candidates.set(key(x, y, z), cell);
           }
     } else {
-      for (const position of blocks.keys()) {
+      for (const position of blockSource.keys()) {
         const [x, y, z] = position.split(",").map(Number);
         const occupied = { x, y, z };
         if (!inside(occupied)) continue;
@@ -4641,19 +5084,19 @@ function smoothVoxelObject(bounds, iterations, allowed = () => true, options = {
     }
     const changes = [];
     for (const [position, cell] of candidates) {
-      const currentType = blocks.get(position);
+      const currentType = blockSource.get(position);
       let occupiedNeighbors = 0;
       const neighborTypes = new Map();
       for (const [dx, dy, dz] of directions) {
-        const type = blocks.get(key(cell.x + dx, cell.y + dy, cell.z + dz));
+        const type = blockSource.get(key(cell.x + dx, cell.y + dy, cell.z + dz));
         if (!type) continue;
         occupiedNeighbors++;
         neighborTypes.set(type, (neighborTypes.get(type) || 0) + 1);
       }
       const bridgesGap = bridgeGaps && (
-        (blocks.has(key(cell.x - 1, cell.y, cell.z)) && blocks.has(key(cell.x + 1, cell.y, cell.z))) ||
-        (blocks.has(key(cell.x, cell.y - 1, cell.z)) && blocks.has(key(cell.x, cell.y + 1, cell.z))) ||
-        (blocks.has(key(cell.x, cell.y, cell.z - 1)) && blocks.has(key(cell.x, cell.y, cell.z + 1)))
+        (blockSource.has(key(cell.x - 1, cell.y, cell.z)) && blockSource.has(key(cell.x + 1, cell.y, cell.z))) ||
+        (blockSource.has(key(cell.x, cell.y - 1, cell.z)) && blockSource.has(key(cell.x, cell.y + 1, cell.z))) ||
+        (blockSource.has(key(cell.x, cell.y, cell.z - 1)) && blockSource.has(key(cell.x, cell.y, cell.z + 1)))
       );
       if (currentType && occupiedNeighbors <= removeThreshold) {
         changes.push({ ...cell, type: null });
@@ -4662,7 +5105,7 @@ function smoothVoxelObject(bounds, iterations, allowed = () => true, options = {
         for (const [type, count] of neighborTypes) {
           if (count > bestCount) { fillType = type; bestCount = count; }
         }
-        changes.push({ ...cell, type: fillType });
+        if (fillType) changes.push({ ...cell, type: fillType });
       }
     }
     if (!changes.length) break;
@@ -4675,12 +5118,14 @@ function smoothVoxelObject(bounds, iterations, allowed = () => true, options = {
   }
 }
 
-function sculptAt(center) {
-  const mode = document.getElementById("sculpt-mode")?.value || "smooth";
-  const strength = Math.max(1, Number(document.getElementById("sculpt-strength")?.value || 1));
-  const range = brushRange();
+function sculptAt(center, config = null) {
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  const mode = config?.mode || document.getElementById("sculpt-mode")?.value || "smooth";
+  const strength = config?.strength ?? Math.max(1, Number(document.getElementById("sculpt-strength")?.value || 1));
+  const range = config?.range || brushRange();
   const radius = Math.max(0.5, range.size / 2);
-  const round = document.getElementById("brush-shape")?.value === "sphere";
+  const round = config?.round ?? document.getElementById("brush-shape")?.value === "sphere";
   if (mode === "object_smooth" || mode === "object_connect") {
     const bounds = {
       min: {
@@ -4695,11 +5140,11 @@ function sculptAt(center) {
     };
     const allowed = cell => {
       if (round && Math.hypot(cell.x - center.x, cell.y - center.y, cell.z - center.z) > radius) return false;
-      return !document.getElementById("limit-to-selection")?.checked || cellInSelection(cell);
+      return !(config?.limitToSelection ?? document.getElementById("limit-to-selection")?.checked) || cellInSelection(cell);
     };
     const options = mode === "object_connect"
-      ? { removeThreshold: 2, fillThreshold: 10, bridgeGaps: true }
-      : undefined;
+      ? { removeThreshold: 2, fillThreshold: 10, bridgeGaps: true, blockSource: layerBlocks }
+      : { blockSource: layerBlocks };
     mutate(() => smoothVoxelObject(bounds, strength, allowed, options));
     return;
   }
@@ -4709,18 +5154,18 @@ function sculptAt(center) {
       if (x < 0 || z < 0 || x >= workspaceSize.x || z >= workspaceSize.z) continue;
       const distance = Math.hypot(x - center.x, z - center.z);
       if (round && distance > radius) continue;
-      const current = columnTop(x, z);
+      const current = columnTop(x, z, layerBlocks);
       const selectionY = THREE.MathUtils.clamp(Math.max(0, current), 0, workspaceSize.y - 1);
-      if (document.getElementById("limit-to-selection")?.checked &&
+      if ((config?.limitToSelection ?? document.getElementById("limit-to-selection")?.checked) &&
           !cellInSelection({ x, y: selectionY, z })) continue;
       columns.push({ x, z, current, distance });
     }
   if (!columns.length) return;
   const originalHeights = new Map(columns.map(column => [`${column.x},${column.z}`, column.current]));
-  const centerHeight = columnTop(center.x, center.z);
+  const centerHeight = columnTop(center.x, center.z, layerBlocks);
   mutate(() => {
     if (mode === "natural_flatten") {
-      thermalErodeColumns(columns, strength * 2);
+      thermalErodeColumns(columns, strength * 2, 0, workspaceSize.y - 1, layerBlocks);
       return;
     }
     for (const column of columns) {
@@ -4750,7 +5195,7 @@ function sculptAt(center) {
       } else if (mode === "settle") {
         const occupied = [];
         for (let y = 0; y <= column.current; y++) {
-          const type = blocks.get(key(column.x, y, column.z));
+          const type = layerBlocks.get(key(column.x, y, column.z));
           if (type) occupied.push({ y, type });
           if (type) recordLiveEditPreview(column.x, y, column.z, true);
           blocks.delete(key(column.x, y, column.z));
@@ -4771,6 +5216,8 @@ function sculptAt(center) {
 function sculptSelectionTerrain() {
   const bounds = selectedBounds();
   if (!bounds) return;
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
   const mode = document.getElementById("selection-sculpt-mode")?.value || "smooth";
   const strength = Math.max(1, Number(document.getElementById("selection-sculpt-strength")?.value || 1));
   if (mode === "object_smooth" || mode === "object_connect") {
@@ -4818,7 +5265,7 @@ function sculptSelectionTerrain() {
       } else if (mode === "settle") {
         const occupied = [];
         for (let y = bounds.min.y; y <= bounds.max.y; y++) {
-          const type = blocks.get(key(x, y, z));
+          const type = layerBlocks.get(key(x, y, z));
           if (type) occupied.push({ y, type });
           blocks.delete(key(x, y, z));
         }
@@ -4869,10 +5316,11 @@ function shapeNumber(id, fallback, min, max) {
 
 function putGenerated(x, y, z, type = activeBlock, respectMask = true) {
   if (valid({ x, y, z }) && (!respectMask || brushAllowed({ x, y, z }))) {
+    const occupiedInActiveLayer = activeLayer()?.blocks.has(key(x, y, z)) || false;
     if (document.getElementById("place-air-only")?.checked &&
-        tool !== "paste" && tool !== "moveSelection" && blocks.has(key(x, y, z))) return;
+        tool !== "paste" && tool !== "moveSelection" && occupiedInActiveLayer) return;
     if (document.getElementById("place-solid-only")?.checked &&
-        tool !== "paste" && tool !== "moveSelection" && !blocks.has(key(x, y, z))) return;
+        tool !== "paste" && tool !== "moveSelection" && !occupiedInActiveLayer) return;
     recordLiveEditPreview(x, y, z, false);
     blocks.set(key(x, y, z), type);
   }
@@ -5392,8 +5840,7 @@ function collectGeneratedCells(generator, center) {
     const minimum = -Math.floor((thickness - 1) / 2);
     const maximum = Math.ceil((thickness - 1) / 2);
     const occupied = new Set();
-    for (const sampled of curve.getPoints(steps)) {
-      const point = { x: Math.round(sampled.x), y: Math.round(sampled.y), z: Math.round(sampled.z) };
+    const addCurvePoint = point => {
       for (let offsetX = minimum; offsetX <= maximum; offsetX++)
         for (let offsetY = minimum; offsetY <= maximum; offsetY++)
           for (let offsetZ = minimum; offsetZ <= maximum; offsetZ++) {
@@ -5402,6 +5849,28 @@ function collectGeneratedCells(generator, center) {
             occupied.add(position);
             add(point.x + offsetX, point.y + offsetY, point.z + offsetZ);
           }
+    };
+    let previousPoint = null;
+    for (const sampled of curve.getSpacedPoints(steps)) {
+      const point = { x: Math.round(sampled.x), y: Math.round(sampled.y), z: Math.round(sampled.z) };
+      if (!previousPoint) {
+        addCurvePoint(point);
+        previousPoint = point;
+        continue;
+      }
+      const dx = point.x - previousPoint.x;
+      const dy = point.y - previousPoint.y;
+      const dz = point.z - previousPoint.z;
+      const bridgeSteps = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+      for (let index = 1; index <= bridgeSteps; index++) {
+        const amount = index / bridgeSteps;
+        addCurvePoint({
+          x: Math.round(previousPoint.x + dx * amount),
+          y: Math.round(previousPoint.y + dy * amount),
+          z: Math.round(previousPoint.z + dz * amount)
+        });
+      }
+      previousPoint = point;
     }
   }
   return cells;
@@ -5519,6 +5988,17 @@ const largeSurfacePreviewCaches = {
   selection: { source: null, status: "empty", token: 0, geometry: null, dimensions: null }
 };
 
+function resetSelectionSurfacePreviewData() {
+  selectionSurfaceBuildToken++;
+  clearSelectionSurfaceMesh();
+  const cache = largeSurfacePreviewCaches.selection;
+  cache.geometry?.dispose();
+  largeSurfacePreviewCaches.selection = {
+    source: null, status: "empty", token: cache.token + 1, geometry: null, dimensions: null
+  };
+  selectionSurfaceSourceCaches.display = { signature: "", items: [], itemMap: new Map() };
+}
+
 function scheduleLargeSurfacePreview(items, channel = "transform") {
   const previousCache = largeSurfacePreviewCaches[channel];
   if (previousCache.source === items) return previousCache;
@@ -5633,6 +6113,11 @@ function transformedSourceFrame(origin, dimensions) {
 function transformedSourceOutline(origin, items) {
   if (!items.length) return [];
   const dimensions = transformedSourceDimensions(items);
+  return transformedSourceOutlineFromDimensions(origin, dimensions);
+}
+
+function transformedSourceOutlineFromDimensions(origin, dimensions) {
+  if (!origin || !dimensions) return [];
   const { size } = transformedSourceFrame(origin, dimensions);
   return [
     { x: origin.x, y: origin.y, z: origin.z, type: "__outline__" },
@@ -5640,21 +6125,50 @@ function transformedSourceOutline(origin, items) {
   ];
 }
 
+function transformAreaPreviewEnabled(candidate = tool) {
+  if (candidate === "paste") return document.getElementById("paste-area-preview")?.checked !== false;
+  if (candidate === "moveSelection")
+    return document.getElementById("move-selection-area-preview")?.checked !== false;
+  return true;
+}
+
+function transformOutlineDimensions(candidate = tool) {
+  if (candidate === "paste") return clipboardBlocks.length
+    ? transformedSourceDimensions(clipboardBlocks)
+    : null;
+  if (candidate === "moveSelection") {
+    const bounds = selectedBounds();
+    return bounds ? {
+      x: bounds.max.x - bounds.min.x + 1,
+      y: bounds.max.y - bounds.min.y + 1,
+      z: bounds.max.z - bounds.min.z + 1
+    } : null;
+  }
+  return null;
+}
+
 const selectionSurfaceSourceCaches = {
   display: { signature: "", items: [], itemMap: new Map() },
   transform: { signature: "", items: [], itemMap: new Map() }
 };
+
+function selectionSurfaceSignature(bounds, forTransform = false) {
+  const firstMaskPosition = selectionMask.values().next().value || "";
+  return [
+    bounds.min.x, bounds.min.y, bounds.min.z,
+    bounds.max.x, bounds.max.y, bounds.max.z,
+    activeLayerId, selectionMask.size, firstMaskPosition,
+    forTransform ? blockMutationRevision : "cached-display"
+  ].join(",");
+}
+
 function selectionSurfaceItems(forTransform = false) {
   const bounds = selectedBounds();
   if (!bounds) return [];
   const sourceCache = selectionSurfaceSourceCaches[forTransform ? "transform" : "display"];
-  const firstMaskPosition = selectionMask.values().next().value || "";
-  const signature = [
-    bounds.min.x, bounds.min.y, bounds.min.z,
-    bounds.max.x, bounds.max.y, bounds.max.z,
-    selectionMask.size, firstMaskPosition,
-    forTransform ? blockMutationRevision : "cached-display"
-  ].join(",");
+  const signature = selectionSurfaceSignature(bounds, forTransform);
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return [];
   if (sourceCache.signature !== signature) {
     const items = [];
     const itemMap = new Map();
@@ -5664,13 +6178,13 @@ function selectionSurfaceItems(forTransform = false) {
     };
     if (selectionMask.size) {
       for (const position of selectionMask) {
-        const type = blocks.get(position);
+        const type = layerBlocks.get(position);
         if (!type) continue;
         const [x, y, z] = position.split(",").map(Number);
         addItem({ x: x - bounds.min.x, y: y - bounds.min.y, z: z - bounds.min.z, type });
       }
     } else {
-      for (const [position, type] of blocks) {
+      for (const [position, type] of layerBlocks) {
         const [x, y, z] = position.split(",").map(Number);
         if (x < bounds.min.x || x > bounds.max.x || y < bounds.min.y || y > bounds.max.y ||
             z < bounds.min.z || z > bounds.max.z) continue;
@@ -5694,6 +6208,72 @@ function selectionSurfaceItems(forTransform = false) {
   return sourceCache.items;
 }
 
+let selectionSurfaceBuildToken = 0;
+function scheduleSelectionSurfacePreview(bounds) {
+  if (!document.getElementById("selection-block-preview")?.checked) {
+    selectionSurfaceBuildToken++;
+    clearSelectionSurfaceMesh();
+    return;
+  }
+  const signature = selectionSurfaceSignature(bounds);
+  const currentCache = selectionSurfaceSourceCaches.display;
+  if (currentCache.signature === signature) {
+    renderSelectionSurfacePreview(bounds);
+    return;
+  }
+  const token = ++selectionSurfaceBuildToken;
+  const itemMap = new Map();
+  const layerBlocks = activeLayer()?.blocks;
+  if (!layerBlocks) return;
+  selectionSurfaceSourceCaches.display = { signature: "", items: [], itemMap };
+  const relevantChunks = [...layerBlocks.chunkCounts().keys()].filter(chunkKey => {
+    const [chunkX, chunkY, chunkZ] = chunkKey.split(",").map(Number);
+    const minX = chunkX * renderChunkSize;
+    const minY = chunkY * renderChunkSize;
+    const minZ = chunkZ * renderChunkSize;
+    return minX <= bounds.max.x && minX + renderChunkSize - 1 >= bounds.min.x &&
+      minY <= bounds.max.y && minY + renderChunkSize - 1 >= bounds.min.y &&
+      minZ <= bounds.max.z && minZ + renderChunkSize - 1 >= bounds.min.z;
+  });
+  let chunkIndex = 0;
+  const processBatch = () => {
+    if (token !== selectionSurfaceBuildToken) return;
+    const startedAt = performance.now();
+    while (chunkIndex < relevantChunks.length && performance.now() - startedAt < 5) {
+      const chunkKey = relevantChunks[chunkIndex++];
+      layerBlocks.ensureChunk(chunkKey);
+      for (const position of layerBlocks.chunkPositions.get(chunkKey) || []) {
+        const [x, y, z] = position.split(",").map(Number);
+        if (x < bounds.min.x || x > bounds.max.x || y < bounds.min.y || y > bounds.max.y ||
+            z < bounds.min.z || z > bounds.max.z ||
+            (selectionMask.size && !selectionMask.has(position))) continue;
+        const type = Map.prototype.get.call(layerBlocks, position);
+        if (!type) continue;
+        const localPosition = key(x - bounds.min.x, y - bounds.min.y, z - bounds.min.z);
+        itemMap.set(localPosition, {
+          x: x - bounds.min.x, y: y - bounds.min.y, z: z - bounds.min.z, type
+        });
+      }
+    }
+    if (chunkIndex < relevantChunks.length) {
+      setTimeout(processBatch, 0);
+      return;
+    }
+    const items = [...itemMap.values()];
+    items.push({ x: 0, y: 0, z: 0, type: "__air__" });
+    items.push({
+      x: bounds.max.x - bounds.min.x,
+      y: bounds.max.y - bounds.min.y,
+      z: bounds.max.z - bounds.min.z,
+      type: "__air__"
+    });
+    if (token !== selectionSurfaceBuildToken) return;
+    selectionSurfaceSourceCaches.display = { signature, items, itemMap };
+    renderSelectionSurfacePreview(bounds);
+  };
+  setTimeout(processBatch, 0);
+}
+
 const pendingSelectionDisplayChangeBatches = [];
 let selectionDisplayPatchRunning = false;
 
@@ -5707,7 +6287,8 @@ function scheduleSelectionDisplayPatch(changes) {
     try {
       const sourceCache = selectionSurfaceSourceCaches.display;
       const bounds = selectedBounds();
-      if (!bounds || !sourceCache.signature) return;
+      const layerBlocks = activeLayer()?.blocks;
+      if (!bounds || !sourceCache.signature || !layerBlocks) return;
       while (pendingSelectionDisplayChangeBatches.length) {
         const batch = pendingSelectionDisplayChangeBatches.shift();
         let frameStartedAt = performance.now();
@@ -5719,7 +6300,7 @@ function scheduleSelectionDisplayPatch(changes) {
             y >= bounds.min.y && y <= bounds.max.y && z >= bounds.min.z && z <= bounds.max.z;
           if (insideBounds && (!selectionMask.size || selectionMask.has(position))) {
             const localPosition = key(x - bounds.min.x, y - bounds.min.y, z - bounds.min.z);
-            const type = blocks.get(position);
+            const type = layerBlocks.get(position);
             if (type) sourceCache.itemMap.set(localPosition, {
               x: x - bounds.min.x, y: y - bounds.min.y, z: z - bounds.min.z, type
             });
@@ -5767,7 +6348,7 @@ function renderSelectionSurfacePreview(bounds) {
   if (cache.status !== "ready" || !cache.geometry) return;
   const material = new THREE.MeshStandardMaterial({
     color: 0xc6a8ff, transparent: true, opacity: 0.2,
-    depthWrite: false, depthTest: true, roughness: 0.76,
+    depthWrite: false, depthTest: false, roughness: 0.76,
     metalness: 0, side: THREE.DoubleSide
   });
   const nextSurfaceMesh = new THREE.Mesh(cache.geometry, material);
@@ -5849,17 +6430,17 @@ function previewCellsForTool(cell) {
   if (tool === "moveSelection") {
     const bounds = selectedBounds();
     if (!bounds) return [];
+    const layerBlocks = activeLayer()?.blocks;
     return transformedPreviewPlacement(cell, selectedCellList().map(source => ({
       x: source.x - bounds.min.x,
       y: source.y - bounds.min.y,
       z: source.z - bounds.min.z,
-      type: blocks.get(key(source.x, source.y, source.z))
+      type: layerBlocks?.get(key(source.x, source.y, source.z))
     }))).filter(preview => preview.type && valid(preview));
   }
   if (tool === "paste") return transformedPreviewPlacement(cell, clipboardBlocks)
     .filter(preview =>
       valid(preview) &&
-      brushAllowed(preview) &&
       (preview.type !== "__air__" || document.getElementById("paste-air")?.checked)
     );
   if (tool === "place" || tool === "erase" || tool === "sculpt") {
@@ -5945,19 +6526,26 @@ function updateGhostPreview(cell) {
   } else {
     brushPreviewSignature = "";
   }
-  const transformSource = largeTransformPreviewSource();
-  const largeTransformPreview = Boolean(cell && transformSource && (
+  const outlineOnlyTransform = Boolean(
+    cell && (tool === "paste" || tool === "moveSelection") && !transformAreaPreviewEnabled()
+  );
+  const transformSource = outlineOnlyTransform ? null : largeTransformPreviewSource();
+  const largeTransformPreview = Boolean(!outlineOnlyTransform && cell && transformSource && (
     transformSource.length > 1000 || (tool === "moveSelection" && selectedCellCount() > 1000)
   ));
-  const cells = largeTransformPreview
+  const cells = outlineOnlyTransform
+      ? transformedSourceOutlineFromDimensions(cell, transformOutlineDimensions())
+    : largeTransformPreview
       ? transformedSourceOutline(cell, transformSource)
       : previewCellsForTool(cell);
-  const previewCellCount = largeTransformPreview
+  const previewCellCount = outlineOnlyTransform
+    ? 0
+    : largeTransformPreview
     ? tool === "moveSelection" ? selectedCellCount() : transformSource.length
     : cells.estimatedCount || cells.length;
   const simplifiedBrush = Boolean(cells.simplifiedBrush);
   const placementPreview = isTransformPlacementTool();
-  const outlineOnlyPreview = placementPreview && previewCellCount > 1000;
+  const outlineOnlyPreview = outlineOnlyTransform || (placementPreview && previewCellCount > 1000);
   const surfacePreview = largeTransformPreview ? scheduleLargeSurfacePreview(transformSource) : null;
   const showDetailedSurface = Boolean(
     surfacePreview?.status === "ready" &&
@@ -5972,6 +6560,7 @@ function updateGhostPreview(cell) {
     `${placementStretch.x},${placementStretch.y},${placementStretch.z}|` +
     `${placementRotation.x},${placementRotation.y},${placementRotation.z}|${previewCellCount}|` +
     `${outlineOnlyPreview ? cells.map(preview => key(preview.x, preview.y, preview.z)).join(";") : ""}|` +
+    `${transformAreaPreviewEnabled()}|` +
     `${surfacePreview?.status || ""}|${showDetailedSurface}|` +
     `${showTransformGizmo}|` +
     `${Math.floor(camera.position.x / 4)},${Math.floor(camera.position.y / 4)},${Math.floor(camera.position.z / 4)}|` +
@@ -6143,8 +6732,9 @@ function transformSelection(mapper) {
   const selected = selectedCellList();
   if (!selected.length) return;
   const wasMask = selectionMask.size > 0;
+  const layerBlocks = activeLayer()?.blocks;
   const sourceBlocks = selected
-    .map(cell => ({ ...cell, type: blocks.get(key(cell.x, cell.y, cell.z)) }))
+    .map(cell => ({ ...cell, type: layerBlocks?.get(key(cell.x, cell.y, cell.z)) }))
     .filter(block => block.type);
   const mappedCells = selected.map(mapper).filter(valid);
   mutate(() => {
@@ -6203,7 +6793,6 @@ function serialize() {
     ? editorViewpointBeforePlay.target.clone()
     : target.clone();
   return {
-    functionName: normalizedFunctionName(document.getElementById("function-name")?.value),
     size: { ...workspaceSize },
     baseCoordinate: { ...baseCoordinate },
     viewpoint: {
@@ -6214,6 +6803,8 @@ function serialize() {
       cameraSpeed: Number(document.getElementById("camera-speed")?.value || 64),
       fogRatio: Number(document.getElementById("fog-density")?.value ?? 50),
       renderDistance: Number(document.getElementById("render-distance")?.value || 256),
+      showMapBoundary: Boolean(document.getElementById("show-map-boundary")?.checked),
+      showFloorGrid: Boolean(document.getElementById("show-floor-grid")?.checked),
       cameraJump: {
         x: Number(document.getElementById("camera-jump-x")?.value || 0),
         y: Number(document.getElementById("camera-jump-y")?.value || 0),
@@ -6222,7 +6813,10 @@ function serialize() {
       timeOfDay: Number(document.getElementById("time-of-day")?.value || 6000),
       blockRenderMode,
       playFov: Number(document.getElementById("play-fov")?.value || 70),
-      playSensitivity: Number(document.getElementById("play-sensitivity")?.value || 100)
+      playSensitivity: Number(document.getElementById("play-sensitivity")?.value || 100),
+      selectionBlockPreview: Boolean(document.getElementById("selection-block-preview")?.checked),
+      pasteAreaPreview: Boolean(document.getElementById("paste-area-preview")?.checked),
+      moveSelectionAreaPreview: Boolean(document.getElementById("move-selection-area-preview")?.checked)
     },
     layers: layers.map(layer => ({
       id: layer.id,
@@ -6253,11 +6847,22 @@ function restoreStructureSettings(settings = {}) {
     const input = document.getElementById(id);
     if (input) input.value = value;
   }
+  const selectionBlockPreview = document.getElementById("selection-block-preview");
+  if (selectionBlockPreview) selectionBlockPreview.checked = settings.selectionBlockPreview !== false;
+  const pasteAreaPreview = document.getElementById("paste-area-preview");
+  if (pasteAreaPreview) pasteAreaPreview.checked = settings.pasteAreaPreview !== false;
+  const moveSelectionAreaPreview = document.getElementById("move-selection-area-preview");
+  if (moveSelectionAreaPreview) moveSelectionAreaPreview.checked = settings.moveSelectionAreaPreview !== false;
+  const showMapBoundary = document.getElementById("show-map-boundary");
+  if (showMapBoundary) showMapBoundary.checked = settings.showMapBoundary !== false;
+  const showFloorGrid = document.getElementById("show-floor-grid");
+  if (showFloorGrid) showFloorGrid.checked = settings.showFloorGrid !== false;
   blockRenderMode = settings.blockRenderMode === "color" ? "color" : "texture";
   document.getElementById("play-fov-value").textContent = `${Number(values["play-fov"])}°`;
   document.getElementById("play-sensitivity-value").textContent = `${Number(values["play-sensitivity"])}%`;
   updateLighting(values["time-of-day"]);
   updateViewSettings(false);
+  updateWorkspaceGuideVisibility(false);
   updateTextureModeUi();
 }
 
@@ -6266,6 +6871,7 @@ function serializeFlat() {
   ensureAllBlockChunksLoaded();
   return {
     ...data,
+    functionName: defaultFunctionNameForFile(currentFile),
     blocks: [...Map.prototype.entries.call(blocks)].map(([position, type]) => {
       const [x, y, z] = position.split(",").map(Number);
       return { x, y, z, type };
@@ -6281,7 +6887,7 @@ function normalizedFunctionName(value, fallback = "build_structure") {
   return String(value || fallback)
     .toLowerCase()
     .replace(/[^a-z0-9_/-]+/g, "_")
-    .replace(/^\/+|\/+$/g, "") || fallback;
+    .replace(/^[_/-]+|[_/-]+$/g, "") || fallback;
 }
 
 function defaultFunctionNameForFile(fileName) {
@@ -6398,10 +7004,6 @@ async function loadStructure(data, fileName) {
   activeUndoChanges = null;
   workspaceSize = normalizedSize(data.size);
   baseCoordinate = normalizedBaseCoordinate(data.baseCoordinate);
-  document.getElementById("function-name").value = normalizedFunctionName(
-    data.functionName,
-    defaultFunctionNameForFile(fileName)
-  );
   const serializedLayers = Array.isArray(data.layers) && data.layers.length
     ? data.layers.map((layer, index) => layerFromSerialized(layer, index))
     : null;
@@ -6476,13 +7078,6 @@ async function loadStructure(data, fileName) {
   rebuild(true);
 }
 
-document.getElementById("function-name")?.addEventListener("input", () => {
-  markCurrentProjectFileDirty();
-  document.getElementById("dirty-state").textContent = "수정됨";
-});
-document.getElementById("function-name")?.addEventListener("change", event => {
-  event.target.value = normalizedFunctionName(event.target.value);
-});
 for (const id of ["base-x", "base-y", "base-z"]) {
   document.getElementById(id)?.addEventListener("change", () => {
     baseCoordinate = readBaseCoordinate();
@@ -6504,6 +7099,8 @@ document.getElementById("time-of-day")?.addEventListener("input", event => updat
 document.getElementById("fog-density")?.addEventListener("input", updateViewSettings);
 document.getElementById("camera-speed")?.addEventListener("input", updateViewSettings);
 document.getElementById("render-distance")?.addEventListener("input", updateViewSettings);
+document.getElementById("show-map-boundary")?.addEventListener("change", () => updateWorkspaceGuideVisibility());
+document.getElementById("show-floor-grid")?.addEventListener("change", () => updateWorkspaceGuideVisibility());
 for (const id of [
   "camera-speed", "fog-density", "render-distance",
   "camera-jump-x", "camera-jump-y", "camera-jump-z",
@@ -6556,6 +7153,19 @@ for (const id of [
     refreshHover();
   });
 }
+document.getElementById("selection-block-preview")?.addEventListener("change", () => {
+  resetSelectionSurfacePreviewData();
+  updateSelection();
+  markCurrentProjectFileDirty();
+});
+for (const id of ["paste-area-preview", "move-selection-area-preview"]) {
+  document.getElementById(id)?.addEventListener("change", () => {
+    ghostSignature = "";
+    clearGhost();
+    refreshHover();
+    markCurrentProjectFileDirty();
+  });
+}
 updateBlockTextPreview();
 setBlockTextFont(document.getElementById("block-text-font")?.value || "bold-sans");
 
@@ -6569,6 +7179,44 @@ function nextUiFrame() {
 
 let activeBpyOperationId = null;
 let bpyExportCoordinateMode = "relative";
+
+const cursorTaskProgresses = new Map();
+
+function positionCursorTaskProgress() {
+  const indicator = document.getElementById("cursor-task-progress");
+  if (!indicator || indicator.hidden || !lastPointer) return;
+  const rect = canvas.getBoundingClientRect();
+  indicator.style.left = `${THREE.MathUtils.clamp(lastPointer.clientX - rect.left, 40, Math.max(40, rect.width - 40))}px`;
+  indicator.style.top = `${THREE.MathUtils.clamp(lastPointer.clientY - rect.top, 0, Math.max(0, rect.height - 26))}px`;
+}
+
+function renderCursorTaskProgress() {
+  const indicator = document.getElementById("cursor-task-progress");
+  if (!indicator) return;
+  const task = cursorTaskProgresses.get("brush") || [...cursorTaskProgresses.values()].at(-1);
+  if (!task) {
+    indicator.hidden = true;
+    indicator.setAttribute("aria-hidden", "true");
+    return;
+  }
+  indicator.hidden = false;
+  indicator.setAttribute("aria-hidden", "false");
+  document.getElementById("cursor-task-bar").style.width = `${task.percent}%`;
+  positionCursorTaskProgress();
+}
+
+function updateCursorTaskProgress(owner, percent, label) {
+  cursorTaskProgresses.set(owner, {
+    percent: THREE.MathUtils.clamp(Number(percent) || 0, 0, 100),
+    label
+  });
+  renderCursorTaskProgress();
+}
+
+function hideCursorTaskProgress(owner) {
+  cursorTaskProgresses.delete(owner);
+  renderCursorTaskProgress();
+}
 
 function updateBpyProgress(percent, detail, title = "BedrockPy 코드 생성 중") {
   const overlay = document.getElementById("bpy-progress");
@@ -6631,8 +7279,7 @@ async function compileCuboids(onProgress) {
 }
 
 async function generateCode() {
-  const functionName = normalizedFunctionName(document.getElementById("function-name").value);
-  document.getElementById("function-name").value = functionName;
+  const functionName = defaultFunctionNameForFile(currentFile);
   baseCoordinate = readBaseCoordinate();
   const absoluteCoordinates = bpyExportCoordinateMode === "absolute";
   const exportedCoordinate = (value, axis) => absoluteCoordinates
@@ -6883,23 +7530,37 @@ async function requestStructureSave(saveAs = false) {
 document.getElementById("save").addEventListener("click", () => requestStructureSave(false));
 document.getElementById("save-as").addEventListener("click", () => requestStructureSave(true));
 document.getElementById("open").addEventListener("click", () => vscode.postMessage({ type: "open" }));
-async function startBpyExport() {
+function startBpyExport() {
   if (activeBpyOperationId) return;
   activeBpyOperationId = `export-${Date.now()}`;
-  updateBpyProgress(1, "구조물 분석 준비 중…", ".bpy로 내보내는 중");
-  await nextUiFrame();
-  const output = await generateCode();
-  vscode.postMessage({ type: "export", operationId: activeBpyOperationId, ...output });
+  vscode.postMessage({
+    type: "requestBpyExport",
+    operationId: activeBpyOperationId,
+    functionName: defaultFunctionNameForFile(currentFile)
+  });
 }
 document.getElementById("export").addEventListener("click", () => {
   if (activeBpyOperationId) return;
   vscode.postMessage({ type: "requestBpyCoordinateMode" });
 });
+document.getElementById("export-mcstructure")?.addEventListener("click", () => {
+  if (activeBpyOperationId) return;
+  activeBpyOperationId = `mcstructure-${Date.now()}`;
+  vscode.postMessage({
+    type: "requestMcstructureExport",
+    operationId: activeBpyOperationId,
+    size: { ...workspaceSize },
+    functionName: defaultFunctionNameForFile(currentFile)
+  });
+});
 document.getElementById("export-mcworld")?.addEventListener("click", () => {
   if (activeBpyOperationId) return;
   activeBpyOperationId = `mcworld-${Date.now()}`;
-  updateBpyProgress(2, "월드 데이터 준비 중…", ".mcworld로 내보내는 중");
-  vscode.postMessage({ type: "exportMcworld", operationId: activeBpyOperationId, data: serializeFlat() });
+  vscode.postMessage({
+    type: "requestMcworldExport",
+    operationId: activeBpyOperationId,
+    functionName: defaultFunctionNameForFile(currentFile)
+  });
 });
 
 window.addEventListener("keydown", event => {
@@ -6927,6 +7588,7 @@ window.addEventListener("keydown", event => {
   }
   if (event.key === "Escape" && pendingPlacement) {
     event.preventDefault();
+    if (unlockOriginalTransformPlacement()) return;
     cancelPendingPlacement();
     return;
   }
@@ -6946,7 +7608,9 @@ window.addEventListener("keydown", event => {
   }
   if (modifier && event.code === "KeyC" && !editingText) {
     event.preventDefault();
-    copySelection(false);
+    event.stopImmediatePropagation();
+    copySelection(false, tool === "moveSelection");
+    return;
   }
   if (modifier && event.code === "KeyX" && !editingText) {
     event.preventDefault();
@@ -7003,7 +7667,7 @@ document.addEventListener("pointerdown", event => {
 }, true);
 window.addEventListener("blur", commitPendingPlacement);
 
-window.addEventListener("message", event => {
+window.addEventListener("message", async event => {
   const message = event.data;
   if (message.type === "layerDeleteConfirmed" && message.confirmed)
     performLayerDelete(message.layerId);
@@ -7066,6 +7730,12 @@ window.addEventListener("message", event => {
   if (message.type === "bpyCoordinateModeSelected" && message.mode) {
     bpyExportCoordinateMode = message.mode;
     startBpyExport();
+  }
+  if (message.type === "bpyExportApproved" && message.operationId === activeBpyOperationId) {
+    updateBpyProgress(1, "구조물 분석 준비 중…", ".bpy로 내보내는 중");
+    await nextUiFrame();
+    const output = await generateCode();
+    vscode.postMessage({ type: "export", operationId: activeBpyOperationId, ...output });
   }
   if (message.type === "projectOpenFailed" && message.requestId === projectOpenRequestId) {
     structureDataLoading = false;
@@ -7134,6 +7804,23 @@ window.addEventListener("message", event => {
   }
   if (message.type === "bpyOperationProgress" && message.operationId === activeBpyOperationId) {
     updateBpyProgress(message.percent, message.detail || "처리 중…");
+  }
+  if (message.type === "mcstructureExportApproved" && message.operationId === activeBpyOperationId) {
+    updateBpyProgress(4, "블록 데이터 수집 중…", ".mcstructure로 내보내는 중");
+    vscode.postMessage({
+      type: "exportMcstructure",
+      operationId: activeBpyOperationId,
+      data: serializeFlat()
+    });
+  }
+  if (message.type === "mcworldExportApproved" && message.operationId === activeBpyOperationId) {
+    updateBpyProgress(2, "월드 데이터 준비 중…", ".mcworld로 내보내는 중");
+    await nextUiFrame();
+    vscode.postMessage({
+      type: "exportMcworld",
+      operationId: activeBpyOperationId,
+      data: serializeFlat()
+    });
   }
   if (message.type === "bpyOperationComplete" && message.operationId === activeBpyOperationId) {
     if (message.error) {
@@ -7213,6 +7900,7 @@ const buttonHelp = {
   undo: "마지막 블록 편집을 취소합니다.",
   redo: "취소한 편집을 다시 적용합니다.",
   export: "구조물을 /fill과 /setblock 명령으로 압축한 .bpy 파일로 내보냅니다.",
+  "export-mcstructure": "현재 구조물을 Minecraft Bedrock .mcstructure 파일로 내보냅니다. 최대 크기는 64×384×64입니다.",
   "export-mcworld": "현재 구조물을 새 Minecraft Bedrock 월드로 내보냅니다. 월드를 처음 열면 구조물이 자동 설치됩니다.",
   "apply-size": "입력한 X/Y/Z 크기를 적용합니다. 범위 밖의 블록은 제거됩니다.",
   "jump-camera": "기준 좌표가 반영된 월드 X/Y/Z 위치로 편집기 또는 Play 시점을 즉시 이동합니다.",
@@ -7255,8 +7943,8 @@ const toolHelp = {
   replace: "선택 영역의 같은 블록을 교체합니다. 연결 옵션을 켜면 붙어 있는 블록만 교체합니다.",
   eyedropper: "화면의 블록을 클릭해 해당 블록 종류를 선택하고 이전 도구로 돌아갑니다.",
   sculpt: "브러시 범위의 지형을 부드럽게 하거나 평탄화·침하·융기·깎기 합니다.",
-  paste: "미리보기는 커서를 따라 이동합니다. 크기·회전을 조정하고 원하는 위치에서 우클릭해 적용합니다.",
-  moveSelection: "선택 영역을 커서로 옮기며 크기·회전을 조정하고 우클릭한 위치에 적용합니다."
+  paste: "복사한 원래 위치의 기즈모로 시작합니다. Esc를 누르면 커서 위치 지정 단계로 전환하고, 좌클릭으로 다시 고정합니다.",
+  moveSelection: "선택 영역의 원래 위치 기즈모로 시작합니다. Esc를 누르면 커서 위치 지정 단계로 전환하고, 좌클릭으로 다시 고정합니다."
 };
 const generatorHelp = {
   sphere: "커서 위치를 중심으로 채워진 구를 미리 보고 생성합니다.",
@@ -7332,7 +8020,9 @@ function animate(now = performance.now()) {
     cameraMotionActive = false;
     refreshHover();
   }
-  if (!structureDataLoading) {
+  // 대형 브러시 적용 중에는 블록 데이터만 변경한다. 새 청크가 생겨도 중간
+  // 메쉬를 만들지 않고, 전체 경로 적용과 Undo 기록이 끝난 뒤 한 번만 갱신한다.
+  if (!structureDataLoading && !deferredBrushCommitActive) {
     syncChunkStreaming();
     if (pendingRenderChunks.size) rebuild(false, true);
   }
